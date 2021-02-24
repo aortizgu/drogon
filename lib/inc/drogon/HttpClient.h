@@ -1,8 +1,8 @@
 /**
  *
- *  HttpClient.h
+ *  @file HttpClient.h
  *
- *  An Tao
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -23,11 +23,36 @@
 #include <functional>
 #include <memory>
 #include <future>
+#include "drogon/HttpBinder.h"
+
+#ifdef __cpp_impl_coroutine
+#include <drogon/utils/coroutine.h>
+#endif
 
 namespace drogon
 {
 class HttpClient;
 using HttpClientPtr = std::shared_ptr<HttpClient>;
+#ifdef __cpp_impl_coroutine
+namespace internal
+{
+struct HttpRespAwaiter : public CallbackAwaiter<HttpResponsePtr>
+{
+    HttpRespAwaiter(HttpClient *client, HttpRequestPtr req, double timeout)
+        : client_(client), req_(std::move(req)), timeout_(timeout)
+    {
+    }
+
+    void await_suspend(std::coroutine_handle<> handle);
+
+  private:
+    HttpClient *client_;
+    HttpRequestPtr req_;
+    double timeout_;
+};
+
+}  // namespace internal
+#endif
 
 /// Asynchronous http client
 /**
@@ -52,13 +77,19 @@ class HttpClient : public trantor::NonCopyable
      * @param req The request sent to the server.
      * @param callback The callback is called when the response is received from
      * the server.
+     * @param timeout In seconds. If the response is not received within the
+     * timeout, the callback is called with `ReqResult::Timeout` and an empty
+     * response. The zero value by default disables the timeout.
+     *
      * @note
      * The request object is altered(some headers are added to it) before it is
      * sent, so calling this method with a same request object in different
      * thread is dangerous.
+     * Please be careful when using timeout on an non-idempotent request.
      */
     virtual void sendRequest(const HttpRequestPtr &req,
-                             const HttpReqCallback &callback) = 0;
+                             const HttpReqCallback &callback,
+                             double timeout = 0) = 0;
 
     /**
      * @brief Send a request asynchronously to the server
@@ -66,33 +97,69 @@ class HttpClient : public trantor::NonCopyable
      * @param req The request sent to the server.
      * @param callback The callback is called when the response is received from
      * the server.
+     * @param timeout In seconds. If the response is not received within
+     * the timeout, the callback is called with `ReqResult::Timeout` and an
+     * empty response. The zero value by default disables the timeout.
+     *
      * @note
      * The request object is altered(some headers are added to it) before it is
      * sent, so calling this method with a same request object in different
      * thread is dangerous.
+     * Please be careful when using timeout on an non-idempotent request.
      */
     virtual void sendRequest(const HttpRequestPtr &req,
-                             HttpReqCallback &&callback) = 0;
+                             HttpReqCallback &&callback,
+                             double timeout = 0) = 0;
 
     /**
      * @brief Send a request synchronously to the server and return the
      * response.
      *
      * @param req
+     * @param timeout In seconds. If the response is not received within the
+     * timeout, the `ReqResult::Timeout` and an empty response is returned. The
+     * zero value by default disables the timeout.
+     *
      * @return std::pair<ReqResult, HttpResponsePtr>
      * @note Never call this function in the event loop thread of the
      * client (partially in the callback function of the asynchronous
      * sendRequest method), otherwise the thread will be blocked forever.
+     * Please be careful when using timeout on an non-idempotent request.
      */
-    std::pair<ReqResult, HttpResponsePtr> sendRequest(const HttpRequestPtr &req)
+    std::pair<ReqResult, HttpResponsePtr> sendRequest(const HttpRequestPtr &req,
+                                                      double timeout = 0)
     {
         std::promise<std::pair<ReqResult, HttpResponsePtr>> prom;
         auto f = prom.get_future();
-        sendRequest(req, [&prom](ReqResult r, const HttpResponsePtr &resp) {
-            prom.set_value({r, resp});
-        });
+        sendRequest(
+            req,
+            [&prom](ReqResult r, const HttpResponsePtr &resp) {
+                prom.set_value({r, resp});
+            },
+            timeout);
         return f.get();
     }
+
+#ifdef __cpp_impl_coroutine
+    /**
+     * @brief Send a request via coroutines to the server and return the
+     * response.
+     *
+     * @param req
+     * @param timeout In seconds. If the response is not received within the
+     * timeout, the `ReqResult::Timeout` and an empty response is returned. The
+     * zero value by default disables the timeout.
+     *
+     * @return task<HttpResponsePtr>
+     */
+    Task<HttpResponsePtr> sendRequestCoro(HttpRequestPtr req,
+                                          double timeout = 0)
+    {
+        co_return co_await internal::HttpRespAwaiter(this,
+                                                     std::move(req),
+                                                     timeout);
+    }
+#endif
 
     /// Set the pipelining depth, which is the number of requests that are not
     /// responding.
@@ -137,17 +204,21 @@ class HttpClient : public trantor::NonCopyable
      * @param ip The ip address of the HTTP server
      * @param port The port of the HTTP server
      * @param useSSL if the parameter is set to true, the client connects to the
-     * server using https.
+     * server using HTTPS.
      * @param loop If the loop parameter is set to nullptr, the client uses the
      * HttpAppFramework's event loop, otherwise it runs in the loop identified
      * by the parameter.
+     * @param useOldTLS If the parameter is set to true, the TLS1.0/1.1 are
+     * eanbled for HTTPS.
      * @return HttpClientPtr The smart pointer to the new client object.
      * @note: The ip parameter support for both ipv4 and ipv6 address
      */
     static HttpClientPtr newHttpClient(const std::string &ip,
                                        uint16_t port,
                                        bool useSSL = false,
-                                       trantor::EventLoop *loop = nullptr);
+                                       trantor::EventLoop *loop = nullptr,
+                                       bool useOldTLS = false,
+                                       bool validateCert = true);
 
     /// Get the event loop of the client;
     virtual trantor::EventLoop *getLoop() = 0;
@@ -175,6 +246,8 @@ class HttpClient : public trantor::NonCopyable
      * HttpAppFramework's event loop, otherwise it runs in the loop identified
      * by the parameter.
      *
+     * @param useOldTLS If the parameter is set to true, the TLS1.0/1.1 are
+     * enabled for HTTPS.
      * @note
      * Don't add path and parameters in hostString, the request path and
      * parameters should be set in HttpRequestPtr when calling the sendRequest()
@@ -182,7 +255,9 @@ class HttpClient : public trantor::NonCopyable
      *
      */
     static HttpClientPtr newHttpClient(const std::string &hostString,
-                                       trantor::EventLoop *loop = nullptr);
+                                       trantor::EventLoop *loop = nullptr,
+                                       bool useOldTLS = false,
+                                       bool validateCert = true);
 
     virtual ~HttpClient()
     {
@@ -191,5 +266,35 @@ class HttpClient : public trantor::NonCopyable
   protected:
     HttpClient() = default;
 };
+
+#ifdef __cpp_impl_coroutine
+inline void internal::HttpRespAwaiter::await_suspend(
+    std::coroutine_handle<> handle)
+{
+    client_->sendRequest(
+        req_,
+        [handle = std::move(handle), this](ReqResult result,
+                                           const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+                setValue(resp);
+            else
+            {
+                std::string reason;
+                if (result == ReqResult::BadResponse)
+                    reason = "BadResponse";
+                else if (result == ReqResult::NetworkFailure)
+                    reason = "NetworkFailure";
+                else if (result == ReqResult::BadServerAddress)
+                    reason = "BadServerAddress";
+                else if (result == ReqResult::Timeout)
+                    reason = "Timeout";
+                setException(
+                    std::make_exception_ptr(std::runtime_error(reason)));
+            }
+            handle.resume();
+        },
+        timeout_);
+}
+#endif
 
 }  // namespace drogon

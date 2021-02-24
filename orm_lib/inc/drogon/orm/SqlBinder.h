@@ -13,6 +13,7 @@
  */
 
 #pragma once
+#include <drogon/orm/DbTypes.h>
 #include <drogon/orm/Exception.h>
 #include <drogon/orm/Field.h>
 #include <drogon/orm/FunctionTraits.h>
@@ -20,7 +21,9 @@
 #include <drogon/orm/Row.h>
 #include <drogon/orm/RowIterator.h>
 #include <drogon/utils/string_view.h>
+#include <drogon/utils/optional.h>
 #include <trantor/utils/Logger.h>
+#include <trantor/utils/NonCopyable.h>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -35,14 +38,19 @@
 #include <arpa/inet.h>
 #endif
 
-#if defined __linux__ || defined __FreeBSD__
+#if defined __linux__ || defined __FreeBSD__ || defined __OpenBSD__ || \
+    defined __MINGW32__
 
 #ifdef __linux__
 #include <endian.h>  // __BYTE_ORDER __LITTLE_ENDIAN
-#elif defined __FreeBSD__
+#elif defined __FreeBSD__ || defined __OpenBSD__
 #include <sys/endian.h>  // _BYTE_ORDER _LITTLE_ENDIAN
 #define __BYTE_ORDER _BYTE_ORDER
 #define __LITTLE_ENDIAN _LITTLE_ENDIAN
+#elif defined __MINGW32__
+#include <sys/param.h>  // BYTE_ORDER LITTLE_ENDIAN
+#define __BYTE_ORDER BYTE_ORDER
+#define __LITTLE_ENDIAN LITTLE_ENDIAN
 #endif
 
 #include <algorithm>  // std::reverse()
@@ -255,7 +263,7 @@ class CallbackHolder : public CallbackHolderBase
         return field.as<ValueType>();
     }
 };
-class SqlBinder
+class SqlBinder : public trantor::NonCopyable
 {
     using self = SqlBinder;
 
@@ -288,6 +296,29 @@ class SqlBinder
           type_(type)
     {
     }
+    SqlBinder(SqlBinder &&that)
+        : sqlPtr_(std::move(that.sqlPtr_)),
+          sqlViewPtr_(that.sqlViewPtr_),
+          sqlViewLength_(that.sqlViewLength_),
+          client_(that.client_),
+          parametersNumber_(that.parametersNumber_),
+          parameters_(std::move(that.parameters_)),
+          lengths_(std::move(that.lengths_)),
+          formats_(std::move(that.formats_)),
+          objs_(std::move(that.objs_)),
+          mode_(that.mode_),
+          callbackHolder_(std::move(that.callbackHolder_)),
+          exceptionCallback_(std::move(that.exceptionCallback_)),
+          exceptionPtrCallback_(std::move(that.exceptionPtrCallback_)),
+          execed_(that.execed_),
+          destructed_(that.destructed_),
+          isExceptionPtr_(that.isExceptionPtr_),
+          type_(that.type_)
+    {
+        // set the execed_ to true to avoid the same sql being executed twice.
+        that.execed_ = true;
+    }
+    SqlBinder &operator=(SqlBinder &&that) = delete;
     ~SqlBinder();
     template <typename CallbackType,
               typename traits = FunctionTraits<CallbackType>>
@@ -426,6 +457,7 @@ class SqlBinder
     }
     self &operator<<(double f);
     self &operator<<(std::nullptr_t nullp);
+    self &operator<<(DefaultValue dv);
     self &operator<<(const Mode &mode)
     {
         mode_ = mode;
@@ -436,14 +468,31 @@ class SqlBinder
         mode_ = mode;
         return *this;
     }
-
+    template <typename T>
+    self &operator<<(const optional<T> &parameter)
+    {
+        if (parameter)
+        {
+            return *this << parameter.value();
+        }
+        return *this << nullptr;
+    }
+    template <typename T>
+    self &operator<<(optional<T> &&parameter)
+    {
+        if (parameter)
+        {
+            return *this << std::move(parameter.value());
+        }
+        return *this << nullptr;
+    }
     void exec() noexcept(false);
 
   private:
     int getMysqlTypeBySize(size_t size);
     std::shared_ptr<std::string> sqlPtr_;
     const char *sqlViewPtr_;
-    const size_t sqlViewLength_;
+    size_t sqlViewLength_;
     DbClient &client_;
     size_t parametersNumber_{0};
     std::vector<const char *> parameters_;

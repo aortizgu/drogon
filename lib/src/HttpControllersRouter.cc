@@ -1,7 +1,7 @@
 /**
  *
- *  HttpControllersRouter.cc
- *  An Tao
+ *  @file HttpControllersRouter.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -33,8 +33,10 @@ void HttpControllersRouter::doWhenNoHandlerFound(
         !HttpAppFrameworkImpl::instance().getHomePage().empty())
     {
         req->setPath("/" + HttpAppFrameworkImpl::instance().getHomePage());
-        HttpAppFrameworkImpl::instance().forward(req, std::move(callback));
-        return;
+        // Just call the fileRouter_.route instead of forwarding. so comment out
+        // those sentences.
+        // HttpAppFrameworkImpl::instance().forward(req, std::move(callback));
+        // return;
     }
     fileRouter_.route(req, std::move(callback));
 }
@@ -457,7 +459,9 @@ void HttpControllersRouter::route(
                         filters,
                         req,
                         callbackPtr,
-                        [=,
+                        [req,
+                         callbackPtr,
+                         this,
                          &binder,
                          &routerItem,
                          result = std::move(result)]() mutable {
@@ -500,7 +504,9 @@ void HttpControllersRouter::route(
                                 filters,
                                 req,
                                 callbackPtr,
-                                [=,
+                                [this,
+                                 req,
+                                 callbackPtr,
                                  &binder,
                                  &routerItem,
                                  result = std::move(result)]() mutable {
@@ -594,7 +600,8 @@ void HttpControllersRouter::doControllerHandler(
     ctrlBinderPtr->binderPtr_->handleHttpRequest(
         params,
         req,
-        [=, callback = std::move(callback)](const HttpResponsePtr &resp) {
+        [this, req, ctrlBinderPtr, callback = std::move(callback)](
+            const HttpResponsePtr &resp) {
             if (resp->expiredTime() >= 0 && resp->statusCode() != k404NotFound)
             {
                 // cache the response;
@@ -644,6 +651,10 @@ void HttpControllersRouter::doPreHandlingAdvices(
         {
             methods.append("DELETE,");
         }
+        if (routerItem.binders_[Patch] && routerItem.binders_[Patch]->isCORS_)
+        {
+            methods.append("PATCH,");
+        }
         methods.resize(methods.length() - 1);
         resp->addHeader("ALLOW", methods);
         auto &origin = req->getHeader("Origin");
@@ -656,8 +667,11 @@ void HttpControllersRouter::doPreHandlingAdvices(
             resp->addHeader("Access-Control-Allow-Origin", origin);
         }
         resp->addHeader("Access-Control-Allow-Methods", methods);
-        resp->addHeader("Access-Control-Allow-Headers",
-                        "x-requested-with,content-type");
+        auto &headers = req->getHeaderBy("access-control-request-headers");
+        if (!headers.empty())
+        {
+            resp->addHeader("Access-Control-Allow-Headers", headers);
+        }
         callback(resp);
         return;
     }

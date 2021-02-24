@@ -1,7 +1,7 @@
 ﻿/**
  *
- *  test.cc
- *  An Tao
+ *  @file test.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -20,16 +20,21 @@
 
 #include <mutex>
 #include <future>
+#include <algorithm>
+
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+
+#include <sys/stat.h>
 
 #define RESET "\033[0m"
 #define RED "\033[31m"   /* Red */
 #define GREEN "\033[32m" /* Green */
 
 #define JPG_LEN 44618
-#define INDEX_LEN 10606
+size_t indexLen;
+size_t indexImplicitLen;
 
 using namespace drogon;
 
@@ -68,8 +73,8 @@ void doTest(const HttpClientPtr &client,
         std::promise<int> waitCookie;
         auto f = waitCookie.get_future();
         client->sendRequest(req,
-                            [=, &waitCookie](ReqResult result,
-                                             const HttpResponsePtr &resp) {
+                            [client, &waitCookie](ReqResult result,
+                                                  const HttpResponsePtr &resp) {
                                 if (result == ReqResult::Ok)
                                 {
                                     auto &id = resp->getCookie("JSESSIONID");
@@ -95,7 +100,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/slow");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req,
+        [req, isHttps, client](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 outputGood(req, isHttps);
@@ -143,7 +149,8 @@ void doTest(const HttpClientPtr &client,
     req->addHeader("accept-encoding", "gzip");
     req->setPath("/api/v1/apitest/get/111");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody().length() == 4994)
@@ -170,7 +177,8 @@ void doTest(const HttpClientPtr &client,
     req->addHeader("accept-encoding", "br");
     req->setPath("/api/v1/apitest/get/111");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody().length() == 4994)
@@ -198,7 +206,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Post);
     req->setPath("/api/v1/apitest/json");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 std::shared_ptr<Json::Value> ret = *resp;
@@ -225,33 +234,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Post);
     req->setPath("/api/v1/apitest/json");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
-                            if (result == ReqResult::Ok)
-                            {
-                                std::shared_ptr<Json::Value> ret = *resp;
-                                if (ret && (*ret)["result"].asString() == "ok")
-                                {
-                                    outputGood(req, isHttps);
-                                }
-                                else
-                                {
-                                    LOG_DEBUG << resp->getBody();
-                                    LOG_ERROR << "Error!";
-                                    exit(1);
-                                }
-                            }
-                            else
-                            {
-                                LOG_ERROR << "Error!";
-                                exit(1);
-                            }
-                        });
-    // Post json again
-    req = HttpRequest::newHttpJsonRequest(json);
-    req->setMethod(drogon::Post);
-    req->setPath("/api/v1/apitest/json");
-    client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 std::shared_ptr<Json::Value> ret = *resp;
@@ -273,12 +257,66 @@ void doTest(const HttpClientPtr &client,
                             }
                         });
 
+    // Post json again
+    req = HttpRequest::newHttpJsonRequest(json);
+    req->setMethod(drogon::Post);
+    req->setPath("/api/v1/apitest/json");
+    client->sendRequest(req,
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
+                            if (result == ReqResult::Ok)
+                            {
+                                std::shared_ptr<Json::Value> ret = *resp;
+                                if (ret && (*ret)["result"].asString() == "ok")
+                                {
+                                    outputGood(req, isHttps);
+                                }
+                                else
+                                {
+                                    LOG_DEBUG << resp->getBody();
+                                    LOG_ERROR << "Error!";
+                                    exit(1);
+                                }
+                            }
+                            else
+                            {
+                                LOG_ERROR << "Error!";
+                                exit(1);
+                            }
+                        });
+    // Test 404
+    req = HttpRequest::newHttpJsonRequest(json);
+    req->setMethod(drogon::Get);
+    req->setPath("/api/v1/apitest/notFoundRouting");
+    client->sendRequest(req,
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
+                            if (result == ReqResult::Ok)
+                            {
+                                if (resp->getStatusCode() == k404NotFound)
+                                {
+                                    outputGood(req, isHttps);
+                                }
+                                else
+                                {
+                                    LOG_DEBUG << resp->getBody();
+                                    LOG_ERROR << "Error!";
+                                    exit(1);
+                                }
+                            }
+                            else
+                            {
+                                LOG_ERROR << "Error!";
+                                exit(1);
+                            }
+                        });
     /// 1 Get /
     req = HttpRequest::newHttpRequest();
     req->setMethod(drogon::Get);
     req->setPath("/");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 // LOG_DEBUG << resp->getBody();
@@ -303,7 +341,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/tpost");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 // LOG_DEBUG << resp->getBody();
@@ -328,7 +367,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Post);
     req->setPath("/tpost");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "<p>Hello, world!</p>")
@@ -353,7 +393,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Options);
     req->setPath("/tpost");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 // LOG_DEBUG << resp->getBody();
@@ -380,7 +421,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Options);
     req->setPath("/api/v1/apitest");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 // LOG_DEBUG << resp->getBody();
@@ -407,7 +449,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Options);
     req->setPath("/slow");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->statusCode() == k403Forbidden)
@@ -430,63 +473,63 @@ void doTest(const HttpClientPtr &client,
     req = HttpRequest::newHttpRequest();
     req->setMethod(drogon::Options);
     req->setPath("/*");
-    client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
-                            if (result == ReqResult::Ok)
-                            {
-                                // LOG_DEBUG << resp->getBody();
-                                auto allow = resp->getHeader("allow");
-                                if (resp->statusCode() == k200OK &&
-                                    allow == "GET,HEAD,POST,PUT,DELETE,OPTIONS")
-                                {
-                                    outputGood(req, isHttps);
-                                }
-                                else
-                                {
-                                    LOG_ERROR << "Error!";
-                                    exit(1);
-                                }
-                            }
-                            else
-                            {
-                                LOG_ERROR << "Error!";
-                                exit(1);
-                            }
-                        });
+    client->sendRequest(
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+            {
+                // LOG_DEBUG << resp->getBody();
+                auto allow = resp->getHeader("allow");
+                if (resp->statusCode() == k200OK &&
+                    allow == "GET,HEAD,POST,PUT,DELETE,OPTIONS,PATCH")
+                {
+                    outputGood(req, isHttps);
+                }
+                else
+                {
+                    LOG_ERROR << "Error!";
+                    exit(1);
+                }
+            }
+            else
+            {
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+        });
 
     req = HttpRequest::newHttpRequest();
     req->setMethod(drogon::Options);
     req->setPath("/api/v1/apitest/static");
-    client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
-                            if (result == ReqResult::Ok)
-                            {
-                                // LOG_DEBUG << resp->getBody();
-                                auto allow = resp->getHeader("allow");
-                                if (resp->statusCode() == k200OK &&
-                                    allow == "OPTIONS,GET,HEAD")
-                                {
-                                    outputGood(req, isHttps);
-                                }
-                                else
-                                {
-                                    LOG_ERROR << "Error!";
-                                    exit(1);
-                                }
-                            }
-                            else
-                            {
-                                LOG_ERROR << "Error!";
-                                exit(1);
-                            }
-                        });
+    client->sendRequest(
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+            {
+                // LOG_DEBUG << resp->getBody();
+                auto allow = resp->getHeader("allow");
+                if (resp->statusCode() == k200OK && allow == "OPTIONS,GET,HEAD")
+                {
+                    outputGood(req, isHttps);
+                }
+                else
+                {
+                    LOG_ERROR << "Error!";
+                    exit(1);
+                }
+            }
+            else
+            {
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+        });
 
     /// 4. Test HttpController
     req = HttpRequest::newHttpRequest();
     req->setMethod(drogon::Post);
     req->setPath("/api/v1/apitest");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "ROOT Post!!!")
@@ -511,7 +554,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/apitest");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "ROOT Get!!!")
@@ -536,7 +580,7 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/apitest/get/abc/123");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find("<td>p1</td>\n        <td>123</td>") !=
@@ -565,7 +609,7 @@ void doTest(const HttpClientPtr &client,
     req->setPath("/api/v1/apitest/3.14/List");
     req->setParameter("P2", "1234");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find(
@@ -595,7 +639,7 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/reg/123/rest/of/the/path");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok && resp->getJsonObject())
             {
                 auto &json = resp->getJsonObject();
@@ -623,7 +667,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/apitest/static");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "staticApi,hello!!")
@@ -650,7 +695,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Post);
     req->setPath("/api/v1/apitest/static");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "staticApi,hello!!")
@@ -675,7 +721,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/apitest/get/111");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody().length() == 4994)
@@ -702,7 +749,7 @@ void doTest(const HttpClientPtr &client,
     req->setPath("/api/v1/handle11/11/2 2/?p3=3 x");
     req->setParameter("p4", "44");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find(
@@ -738,7 +785,7 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/handle11/11/2 2/");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find(
@@ -774,7 +821,7 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/handle2/111/222");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find("<td>a</td>\n        <td>111</td>") !=
@@ -804,7 +851,7 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/handle4/444/333/111");
     client->sendRequest(
-        req, [=](ReqResult result, const HttpResponsePtr &resp) {
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().find(
@@ -840,10 +887,11 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/index.html");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
-                                if (resp->getBody().length() == INDEX_LEN)
+                                if (resp->getBody().length() == indexLen)
                                 {
                                     outputGood(req, isHttps);
                                 }
@@ -866,10 +914,11 @@ void doTest(const HttpClientPtr &client,
     req->setPath("/index.html");
     req->addHeader("accept-encoding", "gzip");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
-                                if (resp->getBody().length() == INDEX_LEN)
+                                if (resp->getBody().length() == indexLen)
                                 {
                                     outputGood(req, isHttps);
                                 }
@@ -886,12 +935,41 @@ void doTest(const HttpClientPtr &client,
                                 exit(1);
                             }
                         });
+    // Test 405
+    req = HttpRequest::newHttpRequest();
+    req->setMethod(drogon::Post);
+    req->setPath("/drogon.jpg");
+    client->sendRequest(
+        req,
+        [req, client, isHttps, &pro](ReqResult result,
+                                     const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+            {
+                if (resp->getStatusCode() == k405MethodNotAllowed)
+                {
+                    outputGood(req, isHttps);
+                }
+                else
+                {
+                    LOG_DEBUG << resp->getBody().length();
+                    LOG_ERROR << "Error!";
+                    exit(1);
+                }
+            }
+            else
+            {
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+        });
     /// Test file download
     req = HttpRequest::newHttpRequest();
     req->setMethod(drogon::Get);
     req->setPath("/drogon.jpg");
     client->sendRequest(
-        req, [=, &pro](ReqResult result, const HttpResponsePtr &resp) {
+        req,
+        [req, client, isHttps, &pro](ReqResult result,
+                                     const HttpResponsePtr &resp) {
             if (result == ReqResult::Ok)
             {
                 if (resp->getBody().length() == JPG_LEN)
@@ -906,8 +984,8 @@ void doTest(const HttpClientPtr &client,
                     req->addHeader("If-Modified-Since", lastModified);
                     client->sendRequest(
                         req,
-                        [=, &pro](ReqResult result,
-                                  const HttpResponsePtr &resp) {
+                        [req, isHttps, &pro](ReqResult result,
+                                             const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->statusCode() == k304NotModified)
@@ -949,7 +1027,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/../../drogon.jpg");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->statusCode() == k403Forbidden)
@@ -974,7 +1053,8 @@ void doTest(const HttpClientPtr &client,
     req->setPath("/customctrl/antao");
     req->addHeader("custom_header", "yes");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 auto ret = resp->getBody();
@@ -999,7 +1079,8 @@ void doTest(const HttpClientPtr &client,
     req = HttpRequest::newHttpRequest();
     req->setPath("/absolute/123");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->statusCode() == k200OK)
@@ -1023,7 +1104,8 @@ void doTest(const HttpClientPtr &client,
     req = HttpRequest::newHttpRequest();
     req->setPath("/plaintext");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody() == "Hello, World!")
@@ -1050,7 +1132,8 @@ void doTest(const HttpClientPtr &client,
     req->setParameter("k2", "安");
     req->setParameter("k3", "test@example.com");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 auto ret = resp->getJsonObject();
@@ -1077,7 +1160,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/v1/apitest/attrs");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 auto ret = resp->getJsonObject();
@@ -1104,7 +1188,8 @@ void doTest(const HttpClientPtr &client,
     req->setMethod(drogon::Get);
     req->setPath("/api/attachment/download");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps](ReqResult result,
+                                       const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
                                 if (resp->getBody().length() == JPG_LEN)
@@ -1124,33 +1209,57 @@ void doTest(const HttpClientPtr &client,
                                 exit(1);
                             }
                         });
-    // return;
-    // Test file upload
-    UploadFile file1("./drogon.jpg");
-    UploadFile file2("./drogon.jpg", "drogon1.jpg");
-    UploadFile file3("./config.example.json", "config.json", "file3");
-    req = HttpRequest::newFileUploadRequest({file1, file2, file3});
-    req->setPath("/api/attachment/upload");
-    req->setParameter("P1", "upload");
-    req->setParameter("P2", "test");
+    // Test implicit pages
+    std::string body;
+    req = HttpRequest::newHttpRequest();
+    req->setMethod(drogon::Get);
+    req->setPath("/a-directory");
+    client->sendRequest(
+        req,
+        [req, isHttps, &body](ReqResult result, const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+            {
+                if (resp->getBody().length() == indexImplicitLen)
+                {
+                    body = std::string(resp->getBody().data(),
+                                       resp->getBody().length());
+                    outputGood(req, isHttps);
+                }
+                else
+                {
+                    LOG_DEBUG << resp->getBody().length();
+                    LOG_ERROR << "Error!";
+                    LOG_ERROR << resp->getBody();
+                    exit(1);
+                }
+            }
+            else
+            {
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+        });
+    req = HttpRequest::newHttpRequest();
+    req->setMethod(drogon::Get);
+    req->setPath("/a-directory/page.html");
     client->sendRequest(req,
-                        [=](ReqResult result, const HttpResponsePtr &resp) {
+                        [req, isHttps, &body](ReqResult result,
+                                              const HttpResponsePtr &resp) {
                             if (result == ReqResult::Ok)
                             {
-                                auto json = resp->getJsonObject();
-                                if (json &&
-                                    (*json)["result"].asString() == "ok" &&
-                                    (*json)["P1"] == "upload" &&
-                                    (*json)["P2"] == "test")
+                                if (resp->getBody().length() ==
+                                        indexImplicitLen &&
+                                    std::equal(body.begin(),
+                                               body.end(),
+                                               resp->getBody().begin()))
                                 {
                                     outputGood(req, isHttps);
-                                    // std::cout << (*json) << std::endl;
                                 }
                                 else
                                 {
                                     LOG_DEBUG << resp->getBody().length();
-                                    LOG_DEBUG << resp->getBody();
                                     LOG_ERROR << "Error!";
+                                    LOG_ERROR << resp->getBody();
                                     exit(1);
                                 }
                             }
@@ -1160,6 +1269,104 @@ void doTest(const HttpClientPtr &client,
                                 exit(1);
                             }
                         });
+    // return;
+    // Test file upload
+    UploadFile file1("./drogon.jpg");
+    UploadFile file2("./drogon.jpg", "drogon1.jpg");
+    UploadFile file3("./config.example.json", "config.json", "file3");
+    req = HttpRequest::newFileUploadRequest({file1, file2, file3});
+    req->setPath("/api/attachment/upload");
+    req->setParameter("P1", "upload");
+    req->setParameter("P2", "test");
+    client->sendRequest(
+        req, [req, isHttps](ReqResult result, const HttpResponsePtr &resp) {
+            if (result == ReqResult::Ok)
+            {
+                auto json = resp->getJsonObject();
+                if (json && (*json)["result"].asString() == "ok" &&
+                    (*json)["P1"] == "upload" && (*json)["P2"] == "test")
+                {
+                    outputGood(req, isHttps);
+                    // std::cout << (*json) << std::endl;
+                }
+                else
+                {
+                    LOG_DEBUG << resp->getBody().length();
+                    LOG_DEBUG << resp->getBody();
+                    LOG_ERROR << "Error!";
+                    exit(1);
+                }
+            }
+            else
+            {
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+        });
+
+#ifdef __cpp_impl_coroutine
+    // Test coroutine requests
+    [client, isHttps]() -> AsyncTask {
+        try
+        {
+            auto req = HttpRequest::newHttpRequest();
+            req->setPath("/api/v1/corotest/get");
+            auto resp = co_await client->sendRequestCoro(req);
+            if (resp->getBody() != "DEADBEEF")
+            {
+                LOG_ERROR << resp->getBody();
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+            outputGood(req, isHttps);
+        }
+        catch (const std::exception &e)
+        {
+            LOG_DEBUG << e.what();
+            LOG_ERROR << "Error!";
+            exit(1);
+        }
+    }();
+
+    // Test coroutine request with co_return
+    [client, isHttps]() -> AsyncTask {
+        try
+        {
+            auto req = HttpRequest::newHttpRequest();
+            req->setPath("/api/v1/corotest/get2");
+            auto resp = co_await client->sendRequestCoro(req);
+            if (resp->getBody() != "BADDBEEF")
+            {
+                LOG_ERROR << resp->getBody();
+                LOG_ERROR << "Error!";
+                exit(1);
+            }
+            outputGood(req, isHttps);
+        }
+        catch (const std::exception &e)
+        {
+            LOG_DEBUG << e.what();
+            LOG_ERROR << "Error!";
+            exit(1);
+        }
+    }();
+#endif
+}
+void loadFileLengths()
+{
+    struct stat filestat;
+    if (stat("index.html", &filestat) < 0)
+    {
+        LOG_SYSERR << "Unable to retrieve index.html file sizes";
+        exit(1);
+    }
+    indexLen = filestat.st_size;
+    if (stat("a-directory/page.html", &filestat) < 0)
+    {
+        LOG_SYSERR << "Unable to retrieve a-directory/page.html file sizes";
+        exit(1);
+    }
+    indexImplicitLen = filestat.st_size;
 }
 int main(int argc, char *argv[])
 {
@@ -1170,7 +1377,7 @@ int main(int argc, char *argv[])
         ever = true;
     loop[0].run();
     loop[1].run();
-
+    loadFileLengths();
     do
     {
         std::promise<int> pro1;
@@ -1183,10 +1390,8 @@ int main(int argc, char *argv[])
         if (app().supportSSL())
         {
             std::promise<int> pro2;
-            auto sslClient = HttpClient::newHttpClient("127.0.0.1",
-                                                       8849,
-                                                       true,
-                                                       loop[1].getLoop());
+            auto sslClient = HttpClient::newHttpClient(
+                "127.0.0.1", 8849, true, loop[1].getLoop(), false, false);
             if (sessionID)
                 sslClient->addCookie(sessionID);
             doTest(sslClient, pro2, true);

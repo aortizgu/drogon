@@ -140,9 +140,7 @@ void create_model::createModelClassFromPG(
                     info.colType_ = "int32_t";
                     info.colLength_ = 4;
                 }
-                else if (type == "bigint" ||
-                         type == "numeric")  /// TODO:Use int64 to represent
-                                             /// numeric type?
+                else if (type == "bigint")
                 {
                     info.colType_ = "int64_t";
                     info.colLength_ = 8;
@@ -181,6 +179,10 @@ void create_model::createModelClassFromPG(
                 {
                     info.colType_ = "std::vector<char>";
                 }
+                else if (type.find("numeric") != std::string::npos)
+                {
+                    info.colType_ = "std::string";
+                }
                 else
                 {
                     info.colType_ = "std::string";
@@ -193,6 +195,11 @@ void create_model::createModelClassFromPG(
                     {
                         info.isAutoVal_ = true;
                     }
+                }
+                auto isIdentity = row["is_identity"].as<std::string>();
+                if (isIdentity == "YES")
+                {
+                    info.isAutoVal_ = true;
                 }
                 cols.push_back(std::move(info));
             }
@@ -260,7 +267,7 @@ void create_model::createModelClassFromPG(
     }
     else if (pkNumber > 1)
     {
-        std::vector<std::string> pkNames, pkTypes;
+        std::vector<std::string> pkNames, pkTypes, pkValNames;
         for (size_t i = 1; i <= pkNumber; ++i)
         {
             *client << "SELECT \
@@ -278,6 +285,7 @@ void create_model::createModelClassFromPG(
                     if (isNull)
                         return;
                     pkNames.push_back(colName);
+                    pkValNames.push_back(nameTransform(colName, false));
                     for (auto &col : cols)
                     {
                         if (col.colName_ == colName)
@@ -294,6 +302,7 @@ void create_model::createModelClassFromPG(
         }
         data["primaryKeyName"] = pkNames;
         data["primaryKeyType"] = pkTypes;
+        data["primaryKeyValNames"] = pkValNames;
     }
 
     data["columns"] = cols;
@@ -439,7 +448,8 @@ void create_model::createModelClassFromMysql(
                 {
                     info.colType_ = "std::string";
                 }
-                if (type.find("unsigned") != std::string::npos)
+                if (type.find("unsigned") != std::string::npos &&
+                    info.colType_ != "std::string")
                 {
                     info.colType_ = "u" + info.colType_;
                 }
@@ -459,12 +469,13 @@ void create_model::createModelClassFromMysql(
             std::cerr << e.base().what() << std::endl;
             exit(1);
         };
-    std::vector<std::string> pkNames, pkTypes;
+    std::vector<std::string> pkNames, pkTypes, pkValNames;
     for (auto const &col : cols)
     {
         if (col.isPrimaryKey_)
         {
             pkNames.push_back(col.colName_);
+            pkValNames.push_back(nameTransform(col.colName_, false));
             pkTypes.push_back(col.colType_);
         }
     }
@@ -478,6 +489,7 @@ void create_model::createModelClassFromMysql(
     {
         data["primaryKeyName"] = pkNames;
         data["primaryKeyType"] = pkTypes;
+        data["primaryKeyValNames"] = pkValNames;
     }
     data["columns"] = cols;
     std::ofstream headerFile(path + "/" + className + ".h", std::ofstream::out);
@@ -520,150 +532,134 @@ void create_model::createModelClassFromSqlite3(
     const Json::Value &restfulApiConfig,
     const std::vector<Relationship> &relationships)
 {
-    *client << "SELECT sql FROM sqlite_master WHERE name=? and (type='table' "
-               "or type='view');"
-            << tableName << Mode::Blocking >>
-        [=](bool isNull, std::string sql) {
-            if (!isNull)
+    HttpViewData data;
+    auto className = nameTransform(tableName, true);
+    data["className"] = className;
+    data["tableName"] = toLower(tableName);
+    data["hasPrimaryKey"] = (int)0;
+    data["primaryKeyName"] = "";
+    data["dbName"] = std::string("sqlite3");
+    data["rdbms"] = std::string("sqlite3");
+    data["relationships"] = relationships;
+    std::vector<ColumnInfo> cols;
+    std::string sql = "PRAGMA table_info(" + tableName + ");";
+    *client << sql << Mode::Blocking >> [&](const Result &result) {
+        size_t index = 0;
+        for (auto &row : result)
+        {
+            bool notnull = row["notnull"].as<bool>();
+            bool primary = row["pk"].as<int>();
+            auto type = row["type"].as<std::string>();
+            std::transform(type.begin(), type.end(), type.begin(), tolower);
+            ColumnInfo info;
+            info.index_ = index++;
+            info.dbType_ = "sqlite3";
+            info.colName_ = row["name"].as<std::string>();
+            info.colTypeName_ = nameTransform(info.colName_, true);
+            info.colValName_ = nameTransform(info.colName_, false);
+            info.notNull_ = notnull;
+            info.colDatabaseType_ = type;
+            info.isPrimaryKey_ = primary;
+            if (primary)
             {
-                auto pos1 = sql.find('(');
-                auto pos2 = sql.rfind(')');
-                if (pos1 != std::string::npos && pos2 != std::string::npos)
-                {
-                    sql = sql.substr(pos1 + 1, pos2 - pos1 - 1);
-                    std::regex r(" *, *");
-                    sql = std::regex_replace(sql, r, ",");
+                *client << "SELECT sql FROM sqlite_master WHERE name=? and "
+                           "(type='table' or type='view');"
+                        << tableName << Mode::Blocking >>
+                    [&](bool isNull, std::string sql) {
+                        if (!isNull)
+                        {
+                            std::transform(sql.begin(),
+                                           sql.end(),
+                                           sql.begin(),
+                                           tolower);
+                            if (sql.find("autoincrement") != std::string::npos)
+                            {
+                                info.isAutoVal_ = true;
+                            }
+                        }
+                    } >>
+                    [](const DrogonDbException &e) {
 
-                    auto className = nameTransform(tableName, true);
-                    HttpViewData data;
-                    data["className"] = className;
-                    data["tableName"] = toLower(tableName);
-                    data["hasPrimaryKey"] = (int)0;
-                    data["primaryKeyName"] = "";
-                    data["dbName"] = std::string("sqlite3");
-                    data["rdbms"] = std::string("sqlite3");
-                    data["relationships"] = relationships;
-                    auto columns = utils::splitString(sql, ",");
-                    int i = 0;
-                    std::vector<ColumnInfo> cols;
-                    for (auto &column : columns)
-                    {
-                        std::transform(column.begin(),
-                                       column.end(),
-                                       column.begin(),
-                                       tolower);
-                        auto columnVector = utils::splitString(column, " ");
-                        if (columnVector.size() < 2)
-                            continue;
-                        auto field = columnVector[0];
-                        if (field[0] == '\r' && field[1] == '\n')
-                        {
-                            field = field.substr(2);
-                        }
-                        else if (field[0] == '\r' || field[0] == '\n')
-                        {
-                            field = field.substr(1);
-                        }
-                        auto type = columnVector[1];
-
-                        bool notnull =
-                            (column.find("not null") != std::string::npos);
-                        bool autoVal =
-                            (column.find("autoincrement") != std::string::npos);
-                        bool primary =
-                            (column.find("primary key") != std::string::npos);
-                        ColumnInfo info;
-                        info.index_ = i;
-                        info.dbType_ = "sqlite3";
-                        info.colName_ = field;
-                        info.colTypeName_ = nameTransform(info.colName_, true);
-                        info.colValName_ = nameTransform(info.colName_, false);
-                        info.notNull_ = notnull;
-                        info.colDatabaseType_ = type;
-                        info.isPrimaryKey_ = primary;
-                        info.isAutoVal_ = autoVal;
-
-                        if (type.find("int") != std::string::npos)
-                        {
-                            info.colType_ = "uint64_t";
-                            info.colLength_ = 8;
-                        }
-                        else if (type.find("char") != std::string::npos ||
-                                 type == "text" || type == "clob")
-                        {
-                            info.colType_ = "std::string";
-                        }
-                        else if (type.find("double") != std::string::npos ||
-                                 type == "real" || type == "float")
-                        {
-                            info.colType_ = "double";
-                            info.colLength_ = sizeof(double);
-                        }
-                        else if (type == "bool")
-                        {
-                            info.colType_ = "bool";
-                            info.colLength_ = 1;
-                        }
-                        else if (type == "blob")
-                        {
-                            info.colType_ = "std::vector<char>";
-                        }
-                        else if (field == "constraint")
-                        {
-                            continue;
-                        }
-                        else
-                        {
-                            info.colType_ = "std::string";
-                        }
-                        cols.push_back(std::move(info));
-                        ++i;
-                    }
-
-                    std::vector<std::string> pkNames, pkTypes;
-                    for (auto const &col : cols)
-                    {
-                        if (col.isPrimaryKey_)
-                        {
-                            pkNames.push_back(col.colName_);
-                            pkTypes.push_back(col.colType_);
-                        }
-                    }
-                    data["hasPrimaryKey"] = (int)pkNames.size();
-                    if (pkNames.size() == 1)
-                    {
-                        data["primaryKeyName"] = pkNames[0];
-                        data["primaryKeyType"] = pkTypes[0];
-                    }
-                    else if (pkNames.size() > 1)
-                    {
-                        data["primaryKeyName"] = pkNames;
-                        data["primaryKeyType"] = pkTypes;
-                    }
-                    data["columns"] = cols;
-                    std::ofstream headerFile(path + "/" + className + ".h",
-                                             std::ofstream::out);
-                    std::ofstream sourceFile(path + "/" + className + ".cc",
-                                             std::ofstream::out);
-                    auto templ = DrTemplateBase::newTemplate("model_h.csp");
-                    headerFile << templ->genText(data);
-                    templ = DrTemplateBase::newTemplate("model_cc.csp");
-                    sourceFile << templ->genText(data);
-                    createRestfulAPIController(data, restfulApiConfig);
-                }
-                else
-                {
-                    std::cout << "The sql for creating table is wrong!"
-                              << std::endl;
-                    exit(1);
-                }
+                    };
             }
-        } >>
-        [](const DrogonDbException &e) {
-            std::cerr << e.base().what() << std::endl;
-            exit(1);
-        };
+            auto defaultVal = row["dflt_value"].as<std::string>();
+            if (!defaultVal.empty())
+            {
+                info.hasDefaultVal_ = true;
+            }
+
+            if (type.find("int") != std::string::npos)
+            {
+                info.colType_ = "uint64_t";
+                info.colLength_ = 8;
+            }
+            else if (type.find("char") != std::string::npos || type == "text" ||
+                     type == "clob")
+            {
+                info.colType_ = "std::string";
+            }
+            else if (type.find("double") != std::string::npos ||
+                     type == "real" || type == "float")
+            {
+                info.colType_ = "double";
+                info.colLength_ = sizeof(double);
+            }
+            else if (type == "bool")
+            {
+                info.colType_ = "bool";
+                info.colLength_ = 1;
+            }
+            else if (type == "blob")
+            {
+                info.colType_ = "std::vector<char>";
+            }
+            else if (type == "datetime" || type == "date")
+            {
+                info.colType_ = "::trantor::Date";
+            }
+            else
+            {
+                info.colType_ = "std::string";
+            }
+            cols.push_back(std::move(info));
+        }
+    } >> [](const DrogonDbException &e) {
+        std::cerr << e.base().what() << std::endl;
+        exit(1);
+    };
+    std::vector<std::string> pkNames, pkTypes, pkValNames;
+    for (auto const &col : cols)
+    {
+        if (col.isPrimaryKey_)
+        {
+            pkNames.push_back(col.colName_);
+            pkTypes.push_back(col.colType_);
+            pkValNames.push_back(nameTransform(col.colName_, false));
+        }
+    }
+    data["hasPrimaryKey"] = (int)pkNames.size();
+    if (pkNames.size() == 1)
+    {
+        data["primaryKeyName"] = pkNames[0];
+        data["primaryKeyType"] = pkTypes[0];
+    }
+    else if (pkNames.size() > 1)
+    {
+        data["primaryKeyName"] = pkNames;
+        data["primaryKeyType"] = pkTypes;
+        data["primaryKeyValNames"] = pkValNames;
+    }
+    data["columns"] = cols;
+    std::ofstream headerFile(path + "/" + className + ".h", std::ofstream::out);
+    std::ofstream sourceFile(path + "/" + className + ".cc",
+                             std::ofstream::out);
+    auto templ = DrTemplateBase::newTemplate("model_h.csp");
+    headerFile << templ->genText(data);
+    templ = DrTemplateBase::newTemplate("model_cc.csp");
+    sourceFile << templ->genText(data);
+    createRestfulAPIController(data, restfulApiConfig);
 }
+
 void create_model::createModelFromSqlite3(
     const std::string &path,
     const DbClientPtr &client,
@@ -736,6 +732,12 @@ void create_model::createModel(const std::string &path,
         {
             connStr += " password=";
             connStr += password;
+        }
+        auto characterSet = config.get("client_encoding", "").asString();
+        if (!characterSet.empty())
+        {
+            connStr += " client_encoding=";
+            connStr += characterSet;
         }
 
         auto schema = config.get("schema", "public").asString();
@@ -836,6 +838,12 @@ void create_model::createModel(const std::string &path,
         {
             connStr += " password=";
             connStr += password;
+        }
+        auto characterSet = config.get("client_encoding", "").asString();
+        if (!characterSet.empty())
+        {
+            connStr += " client_encoding=";
+            connStr += characterSet;
         }
         DbClientPtr client = drogon::orm::DbClient::newMysqlClient(connStr, 1);
         std::cout << "Connect to server..." << std::endl;

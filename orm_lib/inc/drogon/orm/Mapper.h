@@ -1,7 +1,7 @@
 /**
  *
- *  Mapper.h
- *  An Tao
+ *  @file Mapper.h
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -261,7 +261,7 @@ class Mapper
         clear();
         auto binder = *client_ << std::move(sql);
         outputPrimeryKeyToBinder(key, binder);
-        binder >> [=](const Result &r) {
+        binder >> [ecb, rcb](const Result &r) {
             if (r.size() == 0)
             {
                 ecb(UnexpectedRows("0 rows found"));
@@ -323,35 +323,24 @@ class Mapper
 
         std::shared_ptr<std::promise<T>> prom =
             std::make_shared<std::promise<T>>();
-        binder >> [=](const Result &r) {
+        binder >> [prom](const Result &r) {
             if (r.size() == 0)
             {
-                try
-                {
-                    throw UnexpectedRows("0 rows found");
-                }
-                catch (...)
-                {
-                    prom->set_exception(std::current_exception());
-                }
+                prom->set_exception(
+                    std::make_exception_ptr(UnexpectedRows("0 rows found")));
             }
             else if (r.size() > 1)
             {
-                try
-                {
-                    throw UnexpectedRows("Found more than one row");
-                }
-                catch (...)
-                {
-                    prom->set_exception(std::current_exception());
-                }
+                prom->set_exception(std::make_exception_ptr(
+                    UnexpectedRows("Found more than one row")));
             }
             else
             {
                 prom->set_value(T(r[0]));
             }
         };
-        binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+        binder >>
+            [prom](const std::exception_ptr &e) { prom->set_exception(e); };
         binder.exec();
         return prom->get_future();
     }
@@ -632,7 +621,7 @@ class Mapper
     std::future<size_t> deleteFutureByPrimaryKey(
         const TraitsPKType &key) noexcept;
 
-  private:
+  protected:
     DbClientPtr client_;
     size_t limit_{0};
     size_t offset_{0};
@@ -803,7 +792,7 @@ inline void Mapper<T>::findOne(const Criteria &criteria,
     if (offset_)
         binder << offset_;
     clear();
-    binder >> [=](const Result &r) {
+    binder >> [ecb, rcb](const Result &r) {
         if (r.size() == 0)
         {
             ecb(UnexpectedRows("0 rows found"));
@@ -859,35 +848,23 @@ inline std::future<T> Mapper<T>::findFutureOne(
         binder << offset_;
     clear();
     std::shared_ptr<std::promise<T>> prom = std::make_shared<std::promise<T>>();
-    binder >> [=](const Result &r) {
+    binder >> [prom](const Result &r) {
         if (r.size() == 0)
         {
-            try
-            {
-                throw UnexpectedRows("0 rows found");
-            }
-            catch (...)
-            {
-                prom->set_exception(std::current_exception());
-            }
+            prom->set_exception(
+                std::make_exception_ptr(UnexpectedRows("0 rows found")));
         }
         else if (r.size() > 1)
         {
-            try
-            {
-                throw UnexpectedRows("Found more than one row");
-            }
-            catch (...)
-            {
-                prom->set_exception(std::current_exception());
-            }
+            prom->set_exception(std::make_exception_ptr(
+                UnexpectedRows("Found more than one row")));
         }
         else
         {
             prom->set_value(T(r[0]));
         }
     };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -981,7 +958,7 @@ inline void Mapper<T>::findBy(const Criteria &criteria,
     if (offset_)
         binder << offset_;
     clear();
-    binder >> [=](const Result &r) {
+    binder >> [rcb](const Result &r) {
         std::vector<T> ret;
         for (auto const &row : r)
         {
@@ -1031,7 +1008,7 @@ inline std::future<std::vector<T>> Mapper<T>::findFutureBy(
     clear();
     std::shared_ptr<std::promise<std::vector<T>>> prom =
         std::make_shared<std::promise<std::vector<T>>>();
-    binder >> [=](const Result &r) {
+    binder >> [prom](const Result &r) {
         std::vector<T> ret;
         for (auto const &row : r)
         {
@@ -1039,7 +1016,7 @@ inline std::future<std::vector<T>> Mapper<T>::findFutureBy(
         }
         prom->set_value(ret);
     };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -1081,7 +1058,7 @@ inline size_t Mapper<T>::count(const Criteria &criteria) noexcept(false)
         binder.exec();  // exec may be throw exception;
     }
     assert(r.size() == 1);
-    return r[0]["count"].as<size_t>();
+    return r[0][(Row::SizeType)0].as<size_t>();
 }
 template <typename T>
 inline void Mapper<T>::count(const Criteria &criteria,
@@ -1100,9 +1077,9 @@ inline void Mapper<T>::count(const Criteria &criteria,
     auto binder = *client_ << std::move(sql);
     if (criteria)
         criteria.outputArgs(binder);
-    binder >> [=](const Result &r) {
+    binder >> [rcb](const Result &r) {
         assert(r.size() == 1);
-        rcb(r[0]["count"].as<size_t>());
+        rcb(r[0][(Row::SizeType)0].as<size_t>());
     };
     binder >> ecb;
 }
@@ -1125,11 +1102,11 @@ inline std::future<size_t> Mapper<T>::countFuture(
 
     std::shared_ptr<std::promise<size_t>> prom =
         std::make_shared<std::promise<size_t>>();
-    binder >> [=](const Result &r) {
+    binder >> [prom](const Result &r) {
         assert(r.size() == 1);
-        prom->set_value(r[0]["count"].as<size_t>());
+        prom->set_value(r[0][(Row::SizeType)0].as<size_t>());
     };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -1242,8 +1219,9 @@ inline std::future<T> Mapper<T>::insertFuture(const T &obj) noexcept
                 tmp.findByPrimaryKey(
                     newObj.getPrimaryKey(),
                     [prom](T selObj) { prom->set_value(selObj); },
-                    [prom](const std::exception_ptr &e) {
-                        prom->set_exception(e);
+                    [prom](const DrogonDbException &e) {
+                        prom->set_exception(
+                            std::make_exception_ptr(Failure(e.base().what())));
                     });
             }
             else
@@ -1252,7 +1230,7 @@ inline std::future<T> Mapper<T>::insertFuture(const T &obj) noexcept
             }
         }
     };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -1310,7 +1288,7 @@ inline void Mapper<T>::update(const T &obj,
     auto binder = *client_ << std::move(sql);
     obj.updateArgs(binder);
     outputPrimeryKeyToBinder(obj.getPrimaryKey(), binder);
-    binder >> [=](const Result &r) { rcb(r.affectedRows()); };
+    binder >> [rcb](const Result &r) { rcb(r.affectedRows()); };
     binder >> ecb;
 }
 template <typename T>
@@ -1338,8 +1316,8 @@ inline std::future<size_t> Mapper<T>::updateFuture(const T &obj) noexcept
 
     std::shared_ptr<std::promise<size_t>> prom =
         std::make_shared<std::promise<size_t>>();
-    binder >> [=](const Result &r) { prom->set_value(r.affectedRows()); };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const Result &r) { prom->set_value(r.affectedRows()); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -1385,7 +1363,7 @@ inline void Mapper<T>::deleteOne(const T &obj,
     sql = replaceSqlPlaceHolder(sql, "$?");
     auto binder = *client_ << std::move(sql);
     outputPrimeryKeyToBinder(obj.getPrimaryKey(), binder);
-    binder >> [=](const Result &r) { rcb(r.affectedRows()); };
+    binder >> [rcb](const Result &r) { rcb(r.affectedRows()); };
     binder >> ecb;
 }
 template <typename T>
@@ -1406,8 +1384,8 @@ inline std::future<size_t> Mapper<T>::deleteFutureOne(const T &obj) noexcept
 
     std::shared_ptr<std::promise<size_t>> prom =
         std::make_shared<std::promise<size_t>>();
-    binder >> [=](const Result &r) { prom->set_value(r.affectedRows()); };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const Result &r) { prom->set_value(r.affectedRows()); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }
@@ -1464,7 +1442,7 @@ inline void Mapper<T>::deleteBy(const Criteria &criteria,
     {
         criteria.outputArgs(binder);
     }
-    binder >> [=](const Result &r) { rcb(r.affectedRows()); };
+    binder >> [rcb](const Result &r) { rcb(r.affectedRows()); };
     binder >> ecb;
 }
 template <typename T>
@@ -1490,8 +1468,8 @@ inline std::future<size_t> Mapper<T>::deleteFutureBy(
 
     std::shared_ptr<std::promise<size_t>> prom =
         std::make_shared<std::promise<size_t>>();
-    binder >> [=](const Result &r) { prom->set_value(r.affectedRows()); };
-    binder >> [=](const std::exception_ptr &e) { prom->set_exception(e); };
+    binder >> [prom](const Result &r) { prom->set_value(r.affectedRows()); };
+    binder >> [prom](const std::exception_ptr &e) { prom->set_exception(e); };
     binder.exec();
     return prom->get_future();
 }

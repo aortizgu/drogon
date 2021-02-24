@@ -1,6 +1,6 @@
 /* This is a JSON format configuration file
  */
-{
+ {
     /*
     //ssl:The global ssl files setting
     "ssl": {

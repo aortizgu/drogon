@@ -1,7 +1,7 @@
 /**
  *
- *  HttpClientImpl.h
- *  An Tao
+ *  @file HttpClientImpl.h
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -32,12 +32,19 @@ class HttpClientImpl : public HttpClient,
   public:
     HttpClientImpl(trantor::EventLoop *loop,
                    const trantor::InetAddress &addr,
-                   bool useSSL = false);
-    HttpClientImpl(trantor::EventLoop *loop, const std::string &hostString);
+                   bool useSSL = false,
+                   bool useOldTLS = false,
+                   bool validateCert = true);
+    HttpClientImpl(trantor::EventLoop *loop,
+                   const std::string &hostString,
+                   bool useOldTLS = false,
+                   bool validateCert = true);
     virtual void sendRequest(const HttpRequestPtr &req,
-                             const HttpReqCallback &callback) override;
+                             const HttpReqCallback &callback,
+                             double timeout = 0) override;
     virtual void sendRequest(const HttpRequestPtr &req,
-                             HttpReqCallback &&callback) override;
+                             HttpReqCallback &&callback,
+                             double timeout = 0) override;
     virtual trantor::EventLoop *getLoop() override
     {
         return loop_;
@@ -78,11 +85,18 @@ class HttpClientImpl : public HttpClient,
     trantor::EventLoop *loop_;
     trantor::InetAddress serverAddr_;
     bool useSSL_;
+    bool validateCert_;
     void sendReq(const trantor::TcpConnectionPtr &connPtr,
                  const HttpRequestPtr &req);
     void sendRequestInLoop(const HttpRequestPtr &req,
-                           const HttpReqCallback &callback);
+                           HttpReqCallback &&callback);
+    void sendRequestInLoop(const HttpRequestPtr &req,
+                           HttpReqCallback &&callback,
+                           double timeout);
     void handleCookies(const HttpResponseImplPtr &resp);
+    void handleResponse(const HttpResponseImplPtr &resp,
+                        std::pair<HttpRequestPtr, HttpReqCallback> &&reqAndCb,
+                        const trantor::TcpConnectionPtr &connPtr);
     void createTcpClient();
     std::queue<std::pair<HttpRequestPtr, HttpReqCallback>> pipeliningCallbacks_;
     std::queue<std::pair<HttpRequestPtr, HttpReqCallback>> requestsBuffer_;
@@ -96,6 +110,7 @@ class HttpClientImpl : public HttpClient,
     size_t bytesReceived_{0};
     bool dns_{false};
     std::shared_ptr<trantor::Resolver> resolverPtr_;
+    bool useOldTLS_{false};
 };
 using HttpClientImplPtr = std::shared_ptr<HttpClientImpl>;
 }  // namespace drogon

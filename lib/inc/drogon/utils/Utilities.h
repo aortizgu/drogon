@@ -21,7 +21,12 @@
 #include <string>
 #include <vector>
 #include <set>
-
+#include <limits>
+#ifdef _WIN32
+#include <time.h>
+char *strptime(const char *s, const char *f, struct tm *tm);
+time_t timegm(struct tm *tm);
+#endif
 namespace drogon
 {
 namespace utils
@@ -93,7 +98,11 @@ std::string urlEncode(const std::string &);
 std::string urlEncodeComponent(const std::string &);
 
 /// Get the MD5 digest of a string.
-std::string getMd5(const std::string &originalString);
+std::string getMd5(const char *data, const size_t dataLen);
+inline std::string getMd5(const std::string &originalString)
+{
+    return getMd5(originalString.data(), originalString.length());
+}
 
 /// Commpress or decompress data using gzip lib.
 /**
@@ -124,6 +133,9 @@ std::string brotliDecompress(const char *data, const size_t ndata);
 char *getHttpFullDate(const trantor::Date &date = trantor::Date::now());
 
 /// Get the trantor::Date object according to the http full date string
+/**
+ * Returns trantor::Date(std::numeric_limits<int64_t>::max()) upon failure.
+ */
 trantor::Date getHttpDate(const std::string &httpFullDateString);
 
 /// Get a formatted string
@@ -134,6 +146,13 @@ std::string formattedString(const char *format, ...);
  * Return 0 or -1 on success or failure.
  */
 int createPath(const std::string &path);
+
+/// Replace all occurances of from to to inplace
+/**
+ * @param from string to replace
+ * @param to string to replace with
+ */
+void replaceAll(std::string &s, const std::string &from, const std::string &to);
 
 }  // namespace utils
 }  // namespace drogon

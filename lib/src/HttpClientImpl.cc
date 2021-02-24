@@ -1,7 +1,7 @@
 /**
  *
- *  HttpClientImpl.cc
- *  An Tao
+ *  @file HttpClientImpl.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -37,7 +37,9 @@ void HttpClientImpl::createTcpClient()
 #ifdef OpenSSL_FOUND
     if (useSSL_)
     {
-        tcpClientPtr_->enableSSL();
+        LOG_TRACE << "useOldTLS=" << useOldTLS_;
+        LOG_TRACE << "domain=" << domain_;
+        tcpClientPtr_->enableSSL(useOldTLS_, validateCert_, domain_);
     }
 #endif
     auto thisPtr = shared_from_this();
@@ -50,7 +52,8 @@ void HttpClientImpl::createTcpClient()
                 return;
             if (connPtr->connected())
             {
-                connPtr->setContext(std::make_shared<HttpResponseParser>());
+                connPtr->setContext(
+                    std::make_shared<HttpResponseParser>(connPtr));
                 // send request;
                 LOG_TRACE << "Connection established!";
                 while (thisPtr->pipeliningCallbacks_.size() <=
@@ -67,6 +70,24 @@ void HttpClientImpl::createTcpClient()
             else
             {
                 LOG_TRACE << "connection disconnect";
+                auto responseParser = connPtr->getContext<HttpResponseParser>();
+                if (responseParser && responseParser->parseResponseOnClose() &&
+                    responseParser->gotAll())
+                {
+                    auto &firstReq = thisPtr->pipeliningCallbacks_.front();
+                    if (firstReq.first->method() == Head)
+                    {
+                        responseParser->setForHeadMethod();
+                    }
+                    auto resp = responseParser->responseImpl();
+                    responseParser->reset();
+                    thisPtr->handleResponse(resp, std::move(firstReq), connPtr);
+                    if (!thisPtr->requestsBuffer_.empty())
+                    {
+                        thisPtr->createTcpClient();
+                    }
+                    return;
+                }
                 thisPtr->onError(ReqResult::NetworkFailure);
             }
         });
@@ -86,19 +107,41 @@ void HttpClientImpl::createTcpClient()
                 thisPtr->onRecvMessage(connPtr, msg);
             }
         });
+    tcpClientPtr_->setSSLErrorCallback([weakPtr](SSLError err) {
+        auto thisPtr = weakPtr.lock();
+        if (!thisPtr)
+            return;
+        if (err == trantor::SSLError::kSSLHandshakeError)
+            thisPtr->onError(ReqResult::HandshakeError);
+        else if (err == trantor::SSLError::kSSLInvalidCertificate)
+            thisPtr->onError(ReqResult::InvalidCertificate);
+        else
+        {
+            LOG_FATAL << "Invalid value for SSLError";
+            abort();
+        }
+    });
     tcpClientPtr_->connect();
 }
 
 HttpClientImpl::HttpClientImpl(trantor::EventLoop *loop,
                                const trantor::InetAddress &addr,
-                               bool useSSL)
-    : loop_(loop), serverAddr_(addr), useSSL_(useSSL)
+                               bool useSSL,
+                               bool useOldTLS,
+                               bool validateCert)
+    : loop_(loop),
+      serverAddr_(addr),
+      useSSL_(useSSL),
+      validateCert_(validateCert),
+      useOldTLS_(useOldTLS)
 {
 }
 
 HttpClientImpl::HttpClientImpl(trantor::EventLoop *loop,
-                               const std::string &hostString)
-    : loop_(loop)
+                               const std::string &hostString,
+                               bool useOldTLS,
+                               bool validateCert)
+    : loop_(loop), validateCert_(validateCert), useOldTLS_(useOldTLS)
 {
     auto lowerHost = hostString;
     std::transform(lowerHost.begin(),
@@ -192,39 +235,103 @@ HttpClientImpl::HttpClientImpl(trantor::EventLoop *loop,
 HttpClientImpl::~HttpClientImpl()
 {
     LOG_TRACE << "Deconstruction HttpClient";
+    if (resolverPtr_ && !(loop_->isInLoopThread()))
+    {
+        // Make sure the resolverPtr_ is destroyed in the correct thread.
+        loop_->queueInLoop([reolverPtr = resolverPtr_]() {});
+    }
 }
 
 void HttpClientImpl::sendRequest(const drogon::HttpRequestPtr &req,
-                                 const drogon::HttpReqCallback &callback)
+                                 const drogon::HttpReqCallback &callback,
+                                 double timeout)
 {
     auto thisPtr = shared_from_this();
-    loop_->runInLoop([thisPtr, req, callback]() {
-        thisPtr->sendRequestInLoop(req, callback);
+    loop_->runInLoop([thisPtr, req, callback = callback, timeout]() mutable {
+        thisPtr->sendRequestInLoop(req, std::move(callback), timeout);
     });
 }
 
 void HttpClientImpl::sendRequest(const drogon::HttpRequestPtr &req,
-                                 drogon::HttpReqCallback &&callback)
+                                 drogon::HttpReqCallback &&callback,
+                                 double timeout)
 {
     auto thisPtr = shared_from_this();
-    loop_->runInLoop([thisPtr, req, callback = std::move(callback)]() {
-        thisPtr->sendRequestInLoop(req, callback);
-    });
+    loop_->runInLoop(
+        [thisPtr, req, callback = std::move(callback), timeout]() mutable {
+            thisPtr->sendRequestInLoop(req, std::move(callback), timeout);
+        });
 }
 
+void HttpClientImpl::sendRequestInLoop(const HttpRequestPtr &req,
+                                       HttpReqCallback &&callback,
+                                       double timeout)
+{
+    if (timeout <= 0)
+    {
+        sendRequestInLoop(req, std::move(callback));
+    }
+    else
+    {
+        auto timeoutFlag = std::make_shared<bool>(false);
+        auto callbackPtr =
+            std::make_shared<drogon::HttpReqCallback>(std::move(callback));
+        loop_->runAfter(timeout, [timeoutFlag, callbackPtr] {
+            if (*timeoutFlag)
+            {
+                return;
+            }
+            *timeoutFlag = true;
+            (*callbackPtr)(ReqResult::Timeout, nullptr);
+        });
+        sendRequestInLoop(req,
+                          [timeoutFlag,
+                           callbackPtr](ReqResult r,
+                                        const HttpResponsePtr &resp) {
+                              if (*timeoutFlag)
+                              {
+                                  return;
+                              }
+                              *timeoutFlag = true;
+                              (*callbackPtr)(r, resp);
+                          });
+    }
+}
 void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
-                                       const drogon::HttpReqCallback &callback)
+                                       drogon::HttpReqCallback &&callback)
 {
     loop_->assertInLoopThread();
     if (!static_cast<drogon::HttpRequestImpl *>(req.get())->passThrough())
     {
-        req->addHeader("Connection", "Keep-Alive");
-        // req->addHeader("Accept", "*/*");
-        if (!domain_.empty())
+        req->addHeader("connection", "Keep-Alive");
+        req->addHeader("user-agent", "DrogonClient");
+    }
+    // Set the host header.
+    if (!domain_.empty())
+    {
+        if ((useSSL_ && serverAddr_.toPort() != 443) ||
+            (!useSSL_ && serverAddr_.toPort() != 80))
         {
-            req->addHeader("Host", domain_);
+            std::string host =
+                domain_ + ":" + std::to_string(serverAddr_.toPort());
+            req->addHeader("host", host);
         }
-        req->addHeader("User-Agent", "DrogonClient");
+        else
+        {
+            req->addHeader("host", domain_);
+        }
+    }
+    else
+    {
+        if ((useSSL_ && serverAddr_.toPort() != 443) ||
+            (!useSSL_ && serverAddr_.toPort() != 80))
+        {
+            req->addHeader("host", serverAddr_.toIpPort());
+        }
+        else
+        {
+            req->addHeader("host", serverAddr_.toIp());
+        }
     }
     for (auto &cookie : validCookies_)
     {
@@ -241,7 +348,8 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
         requestsBuffer_.push(
             {req,
              [thisPtr = shared_from_this(),
-              callback](ReqResult result, const HttpResponsePtr &response) {
+              callback = std::move(callback)](ReqResult result,
+                                              const HttpResponsePtr &response) {
                  callback(result, response);
              }});
         if (!dns_)
@@ -333,8 +441,8 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
                 sendReq(connPtr, req);
                 pipeliningCallbacks_.push(
                     {req,
-                     [thisPtr, callback](ReqResult result,
-                                         const HttpResponsePtr &response) {
+                     [thisPtr, callback = std::move(callback)](
+                         ReqResult result, const HttpResponsePtr &response) {
                          callback(result, response);
                      }});
             }
@@ -342,8 +450,8 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
             {
                 requestsBuffer_.push(
                     {req,
-                     [thisPtr, callback](ReqResult result,
-                                         const HttpResponsePtr &response) {
+                     [thisPtr, callback = std::move(callback)](
+                         ReqResult result, const HttpResponsePtr &response) {
                          callback(result, response);
                      }});
             }
@@ -352,8 +460,8 @@ void HttpClientImpl::sendRequestInLoop(const drogon::HttpRequestPtr &req,
         {
             requestsBuffer_.push(
                 {req,
-                 [thisPtr, callback](ReqResult result,
-                                     const HttpResponsePtr &response) {
+                 [thisPtr, callback = std::move(callback)](
+                     ReqResult result, const HttpResponsePtr &response) {
                      callback(result, response);
                  }});
         }
@@ -373,6 +481,64 @@ void HttpClientImpl::sendReq(const trantor::TcpConnectionPtr &connPtr,
     connPtr->send(std::move(buffer));
 }
 
+void HttpClientImpl::handleResponse(
+    const HttpResponseImplPtr &resp,
+    std::pair<HttpRequestPtr, HttpReqCallback> &&reqAndCb,
+    const trantor::TcpConnectionPtr &connPtr)
+{
+    assert(!pipeliningCallbacks_.empty());
+    auto &type = resp->getHeaderBy("content-type");
+    auto &coding = resp->getHeaderBy("content-encoding");
+    if (coding == "gzip")
+    {
+        resp->gunzip();
+    }
+#ifdef USE_BROTLI
+    else if (coding == "br")
+    {
+        resp->brDecompress();
+    }
+#endif
+    if (type.find("application/json") != std::string::npos)
+    {
+        resp->parseJson();
+    }
+    auto cb = std::move(reqAndCb);
+    pipeliningCallbacks_.pop();
+    handleCookies(resp);
+    cb.second(ReqResult::Ok, resp);
+
+    // LOG_TRACE << "pipelining buffer size=" <<
+    // pipeliningCallbacks_.size(); LOG_TRACE << "requests buffer size="
+    // << requestsBuffer_.size();
+
+    if (connPtr->connected())
+    {
+        if (!requestsBuffer_.empty())
+        {
+            auto &reqAndCallback = requestsBuffer_.front();
+            sendReq(connPtr, reqAndCallback.first);
+            pipeliningCallbacks_.push(std::move(reqAndCallback));
+            requestsBuffer_.pop();
+        }
+        else
+        {
+            if (resp->ifCloseConnection() && pipeliningCallbacks_.empty())
+            {
+                tcpClientPtr_.reset();
+            }
+        }
+    }
+    else
+    {
+        while (!pipeliningCallbacks_.empty())
+        {
+            auto cb = std::move(pipeliningCallbacks_.front());
+            pipeliningCallbacks_.pop();
+            cb.second(ReqResult::NetworkFailure, nullptr);
+        }
+    }
+}
 void HttpClientImpl::onRecvMessage(const trantor::TcpConnectionPtr &connPtr,
                                    trantor::MsgBuffer *msg)
 {
@@ -398,48 +564,9 @@ void HttpClientImpl::onRecvMessage(const trantor::TcpConnectionPtr &connPtr,
         {
             auto resp = responseParser->responseImpl();
             responseParser->reset();
-            assert(!pipeliningCallbacks_.empty());
-            auto &type = resp->getHeaderBy("content-type");
-            auto &coding = resp->getHeaderBy("content-encoding");
-            if (coding == "gzip")
-            {
-                resp->gunzip();
-            }
-#ifdef USE_BROTLI
-            else if (coding == "br")
-            {
-                resp->brDecompress();
-            }
-#endif
-            if (type.find("application/json") != std::string::npos)
-            {
-                resp->parseJson();
-            }
-            auto cb = std::move(firstReq);
-            pipeliningCallbacks_.pop();
-            handleCookies(resp);
             bytesReceived_ += (msgSize - msg->readableBytes());
             msgSize = msg->readableBytes();
-            cb.second(ReqResult::Ok, resp);
-
-            // LOG_TRACE << "pipelining buffer size=" <<
-            // pipeliningCallbacks_.size(); LOG_TRACE << "requests buffer size="
-            // << requestsBuffer_.size();
-
-            if (!requestsBuffer_.empty())
-            {
-                auto &reqAndCb = requestsBuffer_.front();
-                sendReq(connPtr, reqAndCb.first);
-                pipeliningCallbacks_.push(std::move(reqAndCb));
-                requestsBuffer_.pop();
-            }
-            else
-            {
-                if (resp->ifCloseConnection() && pipeliningCallbacks_.empty())
-                {
-                    tcpClientPtr_.reset();
-                }
-            }
+            handleResponse(resp, std::move(firstReq), connPtr);
         }
         else
         {
@@ -451,21 +578,29 @@ void HttpClientImpl::onRecvMessage(const trantor::TcpConnectionPtr &connPtr,
 HttpClientPtr HttpClient::newHttpClient(const std::string &ip,
                                         uint16_t port,
                                         bool useSSL,
-                                        trantor::EventLoop *loop)
+                                        trantor::EventLoop *loop,
+                                        bool useOldTLS,
+                                        bool validateCert)
 {
     bool isIpv6 = ip.find(':') == std::string::npos ? false : true;
     return std::make_shared<HttpClientImpl>(
         loop == nullptr ? HttpAppFrameworkImpl::instance().getLoop() : loop,
         trantor::InetAddress(ip, port, isIpv6),
-        useSSL);
+        useSSL,
+        useOldTLS,
+        validateCert);
 }
 
 HttpClientPtr HttpClient::newHttpClient(const std::string &hostString,
-                                        trantor::EventLoop *loop)
+                                        trantor::EventLoop *loop,
+                                        bool useOldTLS,
+                                        bool validateCert)
 {
     return std::make_shared<HttpClientImpl>(
         loop == nullptr ? HttpAppFrameworkImpl::instance().getLoop() : loop,
-        hostString);
+        hostString,
+        useOldTLS,
+        validateCert);
 }
 
 void HttpClientImpl::onError(ReqResult result)

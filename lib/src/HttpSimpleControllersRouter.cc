@@ -1,7 +1,7 @@
 /**
  *
- *  HttpSimpleControllersRouter.cc
- *  An Tao
+ *  @file HttpSimpleControllersRouter.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -132,7 +132,10 @@ void HttpSimpleControllersRouter::route(
                     std::function<void(const HttpResponsePtr &)>>(
                     std::move(callback));
                 filters_function::doFilters(
-                    filters, req, callbackPtr, [=, &binder]() mutable {
+                    filters,
+                    req,
+                    callbackPtr,
+                    [this, &ctrlInfo, req, callbackPtr, &binder]() mutable {
                         doPreHandlingAdvices(binder,
                                              ctrlInfo,
                                              req,
@@ -167,7 +170,14 @@ void HttpSimpleControllersRouter::route(
                     if (!filters.empty())
                     {
                         filters_function::doFilters(
-                            filters, req, callbackPtr, [=, &binder]() mutable {
+                            filters,
+                            req,
+                            callbackPtr,
+                            [this,
+                             &ctrlInfo,
+                             req,
+                             callbackPtr,
+                             &binder]() mutable {
                                 doPreHandlingAdvices(binder,
                                                      ctrlInfo,
                                                      req,
@@ -320,6 +330,10 @@ void HttpSimpleControllersRouter::doPreHandlingAdvices(
         {
             methods.append("DELETE,");
         }
+        if (routerItem.binders_[Patch] && routerItem.binders_[Patch]->isCORS_)
+        {
+            methods.append("PATCH,");
+        }
         methods.resize(methods.length() - 1);
         resp->addHeader("ALLOW", methods);
 
@@ -333,8 +347,11 @@ void HttpSimpleControllersRouter::doPreHandlingAdvices(
             resp->addHeader("Access-Control-Allow-Origin", origin);
         }
         resp->addHeader("Access-Control-Allow-Methods", methods);
-        resp->addHeader("Access-Control-Allow-Headers",
-                        "x-requested-with,content-type");
+        auto &headers = req->getHeaderBy("access-control-request-headers");
+        if (!headers.empty())
+        {
+            resp->addHeader("Access-Control-Allow-Headers", headers);
+        }
         callback(resp);
         return;
     }

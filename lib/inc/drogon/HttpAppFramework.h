@@ -1,7 +1,7 @@
 /**
  *
- *  HttpAppFramework.h
- *  An Tao
+ *  @file HttpAppFramework.h
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -73,8 +73,8 @@ class HttpAppFramework : public trantor::NonCopyable
     /**
      * Calling this method starts the IO event loops and the main loop of the
      * application;
-     * This method MUST be called in the main thread.
-     * This method blocks the main thread until the main event loop exits.
+     * This method can be called in the main thread or any other thread.
+     * This method blocks the current thread until the main event loop exits.
      */
     virtual void run() = 0;
 
@@ -85,7 +85,8 @@ class HttpAppFramework : public trantor::NonCopyable
     /**
      * Calling this method results in stopping all network IO in the
      * framework and interrupting the blocking of the run() method. Usually,
-     * after calling this method, the application exits.
+     * after calling this method, the application exits (when the run() method
+     * is called in the main thread).
      *
      * @note
      * This method can be called in any thread and anywhere.
@@ -183,7 +184,7 @@ class HttpAppFramework : public trantor::NonCopyable
     /// Register an advice for new connections
     /**
      * @param advice is called immediately when a new connection is
-     * established.the first parameter of it is the remote address of the new
+     * established. the first parameter of it is the remote address of the new
      * connection, the second one is the local address of it.
      * If the advice returns a false value, drogon closes the connection.
      * Users can use this advice to implement some security policies.
@@ -191,6 +192,20 @@ class HttpAppFramework : public trantor::NonCopyable
     virtual HttpAppFramework &registerNewConnectionAdvice(
         const std::function<bool(const trantor::InetAddress &,
                                  const trantor::InetAddress &)> &advice) = 0;
+
+    /**
+     * @brief Register an advice for new HTTP responses.
+     *
+     * @param advice is called immediately when a new HTTP response is created.
+     * Users can use the callback to modify the response if they want.
+     * @note This advice is called before any subsequent operation on the
+     * response is performed by drogon or applications, so some modification
+     * (e.g. modification on the status code) in this callback may be overrided
+     * by subsequent operations.
+     * @return HttpAppFramework&
+     */
+    virtual HttpAppFramework &registerHttpResponseCreationAdvice(
+        const std::function<void(const HttpResponsePtr &)> &advice) = 0;
 
     /// Register a synchronous advice
     /**
@@ -324,6 +339,23 @@ class HttpAppFramework : public trantor::NonCopyable
      * @param filename the configuration file
      */
     virtual HttpAppFramework &loadConfigFile(const std::string &fileName) = 0;
+
+    /// Load the configuration from a Json::Value Object.
+    /**
+     * @param Json::Value Object containing the configuration.
+     * @note Please refer to the configuration file for the content of the json
+     * object.
+     */
+    virtual HttpAppFramework &loadConfigJson(const Json::Value &data) = 0;
+
+    /// Load the configuration from a Json::Value Object.
+    /**
+     * @param rvalue reference to a Json::Value object containing the
+     * configuration.
+     * @note Please refer to the configuration file for the content of the json
+     * object.
+     */
+    virtual HttpAppFramework &loadConfigJson(Json::Value &&data) = 0;
 
     /// Register a HttpSimpleController object into the framework.
     /**
@@ -554,6 +586,9 @@ class HttpAppFramework : public trantor::NonCopyable
         http://[::1]:8080/
         @endcode
      *
+     * @param timeout See the timeout parameter of the sendRequest method of the
+     * HttpClient class. this parameter is only valid when the hostString is not
+     * empty.
      * @param callback is called when the response is created.
      *
      * @note
@@ -568,7 +603,8 @@ class HttpAppFramework : public trantor::NonCopyable
     virtual void forward(
         const HttpRequestPtr &req,
         std::function<void(const HttpResponsePtr &)> &&callback,
-        const std::string &hostString = "") = 0;
+        const std::string &hostString = "",
+        double timeout = 0) = 0;
 
     /// Get information about the handlers registered to drogon
     /**
@@ -613,6 +649,8 @@ class HttpAppFramework : public trantor::NonCopyable
      * @param keyFile specify the cert file and the private key file for this
      * listener. If they are empty, the global configuration set by the above
      * method is used.
+     * @param useOldTLS If true, the TLS1.0/1.1 are enabled for HTTPS
+     * connections.
      *
      * @note
      * This operation can be performed by an option in the configuration file.
@@ -621,7 +659,8 @@ class HttpAppFramework : public trantor::NonCopyable
                                           uint16_t port,
                                           bool useSSL = false,
                                           const std::string &certFile = "",
-                                          const std::string &keyFile = "") = 0;
+                                          const std::string &keyFile = "",
+                                          bool useOldTLS = false) = 0;
 
     /// Enable sessions supporting.
     /**
@@ -1008,12 +1047,64 @@ class HttpAppFramework : public trantor::NonCopyable
      */
     virtual HttpAppFramework &setHomePage(const std::string &homePageFile) = 0;
 
+    /**
+     * @brief Set the TERM Signal Handler. This method provides a way to users
+     * for exiting program gracefully. When the TERM signal is received after
+     * app().run() is called, the handler is invoked. Drogon uses a default
+     * signal handler for the TERM signal, which calls the 'app().quit()' method
+     * when the TERM signal is received.
+     *
+     * @param handler
+     * @return HttpAppFramework&
+     */
+    virtual HttpAppFramework &setTermSignalHandler(
+        const std::function<void()> &handler) = 0;
+
     /// Get homepage, default is "index.html"
     /**
      * @note
      * This method must be called after the framework has been run.
      */
     virtual const std::string &getHomePage() const = 0;
+
+    /// Set to enable implicit pages, enabled by default
+    /**
+     * @brief Implicit pages are used when the server detects if the user
+     * requested a directory. By default, it will try to append index.html to
+     * the path, see setImplicitPage() if you want to customize this
+     * (http://localhost/a-directory resolves to
+     * http://localhost/a-directory/index.html by default).
+     *
+     * @note
+     * This operation can be performed by an option in the configuration file.
+     */
+    virtual HttpAppFramework &setImplicitPageEnable(bool useImplicitPage) = 0;
+
+    /// Return true if implicit pages are enabled
+    /**
+     * @note
+     * This method must be called after the framework has been run.
+     */
+    virtual bool isImplicitPageEnabled() const = 0;
+
+    /// Set the HTML file that a directory would resolve to by default, default
+    /// is "index.html"
+    /**
+     * @brief Sets the page which would the server load in if it detects that
+     * the user requested a directory
+     *
+     * @note
+     * This operation can be performed by an option in the configuration file.
+     */
+    virtual HttpAppFramework &setImplicitPage(
+        const std::string &implicitPageFile) = 0;
+
+    /// Get the implicit HTML page
+    /**
+     * @note
+     * This method must be called after the framework has been run.
+     */
+    virtual const std::string &getImplicitPage() const = 0;
 
     /// Get a database client by name
     /**
@@ -1030,12 +1121,48 @@ class HttpAppFramework : public trantor::NonCopyable
      */
     virtual orm::DbClientPtr getFastDbClient(
         const std::string &name = "default") = 0;
+
     /**
      * @brief Check if all database clients in the framework are available
      * (connect to the database successfully).
      */
     virtual bool areAllDbClientsAvailable() const noexcept = 0;
 
+    /**
+     * @brief This method is to enable or disable the unicode escaping (\u) in
+     * the json string of HTTP responses or requests. it works (disable
+     * successfully) when the version of JsonCpp >= 1.9.3, the unicode escaping
+     * is enabled by default.
+     */
+    virtual HttpAppFramework &setUnicodeEscapingInJson(
+        bool enable) noexcept = 0;
+
+    /**
+     * @brief Check if the unicode escaping is used in the json string of HTTP
+     * requests and responses.
+     */
+    virtual bool isUnicodeEscapingUsedInJson() const noexcept = 0;
+
+    /**
+     * @brief Set the float precision in Json string of HTTP requests or
+     * responses with json content.
+     *
+     * @param precision The maximum digits length.
+     * @param precisionType Must be "significant" or "decimal", defaults to
+     * "significant" that means setting max number of significant digits in
+     * string, "decimal" means setting max number of digits after "." in string
+     * @return HttpAppFramework&
+     */
+    virtual HttpAppFramework &setFloatPrecisionInJson(
+        unsigned int precision,
+        const std::string &precisionType = "significant") noexcept = 0;
+    /**
+     * @brief Get the float precision set by the above method.
+     *
+     * @return std::pair<size_t, std::string>
+     */
+    virtual const std::pair<unsigned int, std::string>
+        &getFloatPrecisionInJson() const noexcept = 0;
     /// Create a database client
     /**
      * @param dbType The database type is one of
@@ -1064,7 +1191,8 @@ class HttpAppFramework : public trantor::NonCopyable
         const size_t connectionNum = 1,
         const std::string &filename = "",
         const std::string &name = "default",
-        const bool isFast = false) = 0;
+        const bool isFast = false,
+        const std::string &characterSet = "") = 0;
 
     /// Get the DNS resolver
     /**
@@ -1081,10 +1209,11 @@ class HttpAppFramework : public trantor::NonCopyable
      * @brief Get the Current Thread Index whose range is [0, the total number
      * of IO threads]
      *
-     * @return size_t If the current thread is the main thread, the number of
-     * the IO threads is returned. If the current thread is a network IO thread,
-     * the index of it in the range [0, the number of IO threads) is returned.
-     * otherwise the maximum value of type size_t is returned.
+     * @return size_t If the current thread is the main EventLoop thread (in
+     * which the app().run() is called), the number of the IO threads is
+     * returned. If the current thread is a network IO thread, the index of it
+     * in the range [0, the number of IO threads) is returned. otherwise the
+     * maximum value of type size_t is returned.
      *
      * @note Basically this method is used for storing thread-related various in
      * an array and users can use indexes returned by this method to access
@@ -1092,6 +1221,30 @@ class HttpAppFramework : public trantor::NonCopyable
      * initialized at the beginning, users can access it without locks.
      */
     virtual size_t getCurrentThreadIndex() const = 0;
+
+    /**
+     * @brief Get the addresses of listeners.
+     *
+     * @return std::vector<trantor::InetAddress>
+     * @note This method should be called after calling the app().run(). One
+     * could run this method in an AOP join point (such as the BeginningAdvice).
+     */
+    virtual std::vector<trantor::InetAddress> getListeners() const = 0;
+
+    /**
+     * @brief Enable ReusePort mode or not. If the mode is enabled, one can run
+     * multiple processes listening to the same port at the same time. If this
+     * method is not called, the feature is disabled.
+     *
+     * @note
+     * This operation can be performed by an option in the configuration file.
+     */
+    virtual void enableReusePort(bool enable = true) = 0;
+
+    /**
+     * @brief Return if the ReusePort mode is enabled.
+     */
+    virtual bool reusePort() const = 0;
 
   private:
     virtual void registerHttpController(

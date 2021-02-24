@@ -1,7 +1,7 @@
 /**
  *
- *  HttpServer.cc
- *  An Tao
+ *  @file HttpServer.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -41,16 +41,9 @@ namespace drogon
 static HttpResponsePtr getCompressedResponse(const HttpRequestImplPtr &req,
                                              const HttpResponsePtr &response,
                                              bool isHeadMethod)
-{  // use gzip
-    LOG_TRACE << "Use gzip to compress the body";
-    auto &sendfileName =
-        static_cast<HttpResponseImpl *>(response.get())->sendfileName();
-    if (!sendfileName.empty() ||
-        response->getContentType() >= CT_APPLICATION_OCTET_STREAM ||
-        response->getBody().length() < 1024 || isHeadMethod ||
-        !(static_cast<HttpResponseImpl *>(response.get())
-              ->getHeaderBy("content-encoding")
-              .empty()))
+{
+    if (isHeadMethod ||
+        !static_cast<HttpResponseImpl *>(response.get())->shouldBeCompressed())
     {
         return response;
     }
@@ -112,8 +105,18 @@ static bool isWebSocket(const HttpRequestImplPtr &req)
     if (headers.find("upgrade") == headers.end() ||
         headers.find("connection") == headers.end())
         return false;
-    if (req->getHeaderBy("connection").find("Upgrade") != std::string::npos &&
-        req->getHeaderBy("upgrade") == "websocket")
+    auto connectionField = req->getHeaderBy("connection");
+    std::transform(connectionField.begin(),
+                   connectionField.end(),
+                   connectionField.begin(),
+                   tolower);
+    auto upgradeField = req->getHeaderBy("upgrade");
+    std::transform(upgradeField.begin(),
+                   upgradeField.end(),
+                   upgradeField.begin(),
+                   tolower);
+    if (connectionField.find("upgrade") != std::string::npos &&
+        upgradeField == "websocket")
     {
         LOG_TRACE << "new websocket request";
 
@@ -155,7 +158,7 @@ HttpServer::HttpServer(
 #ifdef __linux__
     : server_(loop, listenAddr, name.c_str()),
 #else
-    : server_(loop, listenAddr, name.c_str(), true, false),
+    : server_(loop, listenAddr, name.c_str(), true, app().reusePort()),
 #endif
       httpAsyncCallback_(defaultHttpAsyncCallback),
       newWebsocketCallback_(defaultWebSockAsyncCallback),
@@ -326,7 +329,7 @@ void HttpServer::onRequests(
         bool syncFlag = false;
         if (!requestParser->emptyPipelining())
         {
-            requestParser->pushRquestToPipelining(req);
+            requestParser->pushRequestToPipelining(req);
             syncFlag = true;
         }
         if (!syncAdvices_.empty())
@@ -477,7 +480,7 @@ void HttpServer::onRequests(
             });
         if (syncFlag == false)
         {
-            requestParser->pushRquestToPipelining(req);
+            requestParser->pushRequestToPipelining(req);
         }
     }
     *loopFlagPtr = false;

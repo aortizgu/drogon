@@ -39,6 +39,7 @@
 #include <string>
 #include <thread>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <stdio.h>
@@ -49,6 +50,33 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdarg.h>
+
+#ifdef _WIN32
+char *strptime(const char *s, const char *f, struct tm *tm)
+{
+    // std::get_time is defined such that its
+    // format parameters are the exact same as strptime.
+    std::istringstream input(s);
+    input.imbue(std::locale(setlocale(LC_ALL, nullptr)));
+    input >> std::get_time(tm, f);
+    if (input.fail())
+    {
+        return nullptr;
+    }
+    return (char *)(s + input.tellg());
+}
+time_t timegm(struct tm *tm)
+{
+    struct tm my_tm;
+
+    memcpy(&my_tm, tm, sizeof(struct tm));
+
+    /* _mkgmtime() changes the value of the struct tm* you pass in, so
+     * use a copy
+     */
+    return _mkgmtime(&my_tm);
+}
+#endif
 
 namespace drogon
 {
@@ -249,32 +277,7 @@ std::string hexToBinaryString(const char *ptr, size_t length)
     }
     return ret;
 }
-#ifdef _WIN32
-char *strptime(const char *s, const char *f, struct tm *tm)
-{
-    // std::get_time is defined such that its
-    // format parameters are the exact same as strptime.
-    std::istringstream input(s);
-    input.imbue(std::locale(setlocale(LC_ALL, nullptr)));
-    input >> std::get_time(tm, f);
-    if (input.fail())
-    {
-        return nullptr;
-    }
-    return (char *)(s + input.tellg());
-}
-time_t timegm(struct tm *tm)
-{
-    struct tm my_tm;
 
-    memcpy(&my_tm, tm, sizeof(struct tm));
-
-    /* _mkgmtime() changes the value of the struct tm* you pass in, so
-     * use a copy
-     */
-    return _mkgmtime(&my_tm);
-}
-#endif
 std::string binaryStringToHex(const unsigned char *ptr, size_t length)
 {
     std::string idString;
@@ -341,10 +344,15 @@ std::string getUuid()
     std::string ret{binaryStringToHex((const unsigned char *)str, len)};
     free(str);
     return ret;
-#elif defined __FreeBSD__
+#elif defined __FreeBSD__ || defined __OpenBSD__
     uuid_t *uuid = new uuid_t;
     char *binstr = (char *)malloc(16);
+#if defined __FreeBSD__
     uuidgen(uuid, 1);
+#else
+    uint32_t status;
+    uuid_create(uuid, &status);
+#endif
 #if _BYTE_ORDER == _LITTLE_ENDIAN
     uuid_enc_le(binstr, uuid);
 #else  /* _BYTE_ORDER != _LITTLE_ENDIAN */
@@ -939,10 +947,27 @@ char *getHttpFullDate(const trantor::Date &date)
 }
 trantor::Date getHttpDate(const std::string &httpFullDateString)
 {
+    static const std::array<const char *, 4> formats = {
+        // RFC822 (default)
+        "%a, %d %b %Y %H:%M:%S",
+        // RFC 850 (deprecated)
+        "%a, %d-%b-%y %H:%M:%S",
+        // ansi asctime format
+        "%a %b %d %H:%M:%S %Y",
+        // weird RFC 850-hybrid thing that reddit uses
+        "%a, %d-%b-%Y %H:%M:%S",
+    };
     struct tm tmptm;
-    strptime(httpFullDateString.c_str(), "%a, %d %b %Y %H:%M:%S", &tmptm);
-    auto epoch = timegm(&tmptm);
-    return trantor::Date(epoch * MICRO_SECONDS_PRE_SEC);
+    for (const char *format : formats)
+    {
+        if (strptime(httpFullDateString.c_str(), format, &tmptm) != NULL)
+        {
+            auto epoch = timegm(&tmptm);
+            return trantor::Date(epoch * MICRO_SECONDS_PRE_SEC);
+        }
+    }
+    LOG_WARN << "invalid datetime format: '" << httpFullDateString << "'";
+    return trantor::Date((std::numeric_limits<int64_t>::max)());
 }
 std::string formattedString(const char *format, ...)
 {
@@ -1124,18 +1149,28 @@ std::string brotliDecompress(const char *data, const size_t ndata)
 }
 #endif
 
-std::string getMd5(const std::string &originalString)
+std::string getMd5(const char *data, const size_t dataLen)
 {
 #ifdef OpenSSL_FOUND
     MD5_CTX c;
     unsigned char md5[16] = {0};
     MD5_Init(&c);
-    MD5_Update(&c, originalString.c_str(), originalString.size());
+    MD5_Update(&c, data, dataLen);
     MD5_Final(md5, &c);
     return utils::binaryStringToHex(md5, 16);
 #else
-    return Md5Encode::encode(originalString);
+    return Md5Encode::encode(data, dataLen);
 #endif
+}
+
+void replaceAll(std::string &s, const std::string &from, const std::string &to)
+{
+    size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos)
+    {
+        s.replace(pos, from.size(), to);
+        pos += to.size();
+    }
 }
 
 }  // namespace utils

@@ -6,6 +6,8 @@ add_executable(sha1_unittest SHA1Unittest.cpp ../lib/src/ssl_funcs/Sha1.cc)
 add_executable(ostringstream_unittest OStringStreamUnitttest.cpp)
 add_executable(base64_unittest Base64Unittest.cpp)
 add_executable(pubsubservice_unittest PubSubServiceUnittest.cpp)
+add_executable(httpdate_unittest HttpDateUnittest.cpp)
+add_executable(httpheader_unittest HttpHeaderUnittest.cpp)
 if(Brotli_FOUND)
   add_executable(brotli_unittest BrotliUnittest.cpp)
 endif()
@@ -18,7 +20,9 @@ set(UNITTEST_TARGETS
     sha1_unittest
     ostringstream_unittest
     base64_unittest
-    pubsubservice_unittest)
+    pubsubservice_unittest
+    httpdate_unittest
+    httpheader_unittest)
 if(Brotli_FOUND)
   set(UNITTEST_TARGETS ${UNITTEST_TARGETS} brotli_unittest)
 endif()

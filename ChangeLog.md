@@ -4,6 +4,242 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] - 2021-01-16
+
+### API change list
+
+- Add an option for setting float precision in Json string.
+
+### Fixed
+
+- Fix brotli link order.
+
+- Fix cmake with drogonctl cross-compilation.
+
+- sqlite3: Insert into stmtsMap_ as string_view.
+
+- Fix some bugs when creating models via drogon_ctl.
+
+- Fix an error in sqlite3 ORM generator.
+
+- Fix an error with missing composite key to sqlite3 ORM generator.
+
+### Changed
+
+- Remove the use of std::filesystem to adapt to old compilers.
+
+- Add github actions.
+
+- Serve wasm files with the correct MIME type.
+
+## [1.2.0] - 2020-12-12
+
+### Fixed
+
+- Fix error when receiving response without content-length header.
+
+- Fix a stack-overflow error when high concurrency happening on sqlite3.
+
+- Fix MinGW ORM building by enabling htonll and ntohll.
+
+### Changed
+
+- Modify the WebSocketTest controller to create a simple chat room.
+
+- Add support for OpenBSD.
+
+- Return 400 if the content-length is invalid.
+
+- Don't send content type in a 304 response.
+
+- Add the reuse_port option to app() interface.
+
+- Add the 'std::optional' support in the SqlBinder class and the Session class.
+
+- Add implicit page resolving capability.
+
+## [1.1.0] - 2020-10-31
+
+### Fixed
+
+- Fix failing to connect to DB if parameters contains spaces.
+
+- Fix a CMAKE bug when SHARED and EXAMPLES are on.
+
+- Fix the HttpServer::isWebSocket method.
+
+- Find mariadb client library correctly on Ubuntu 20.04.
+
+- Fix a bug when creating sqlite3 database models.
+
+- Fix a bug in the Mapper::insertFuture method.
+
+### Changed
+
+- Disable TLS1.0/1.1 on HTTPS by default.
+
+- Use explicit lambda capture lists.
+
+- Modify the procedure of the app().run() method.
+
+- Support namespaces when creating view source files.
+
+- Add --path-to-namespace option to drogon_ctl for creating views.
+
+- Add the Host and Sec-WebSocket-Version headers when connecting to a websocket server.
+
+## [1.0.0] - 2020-09-27
+
+### Fixed
+
+- Fix an issue of simple_reverse_proxy when handling chunked transfer-encoding.
+
+- Fix a bug when losting connection to MySQL server during query.
+
+- Remove the expired std::iterator template.
+
+- Fix a bug when creating models in some special cases.
+
+### API changes list
+
+- Modify methods related to headers.
+
+- Remove the expired std::iterator template.
+
+- Add getListeners() method to the HttpAppFramework class.
+
+- Remove the useless method stat() from the PluginBase class.
+
+- Add ConfigLoader::ConfigLoader(const Json::Value &data).
+
+### Changed
+
+- Add support for status code 418.
+
+- Modify session handling.
+
+- Modify the FileUpload.csp in simple_example to avoid CORS.
+
+- remove execution permission on /tmp/drogon.lock.
+
+## [1.0.0-beta21] - 2020-08-19
+
+### Changed
+
+- Modify the Result class in orm.
+
+### Fixed
+
+- Fix zlib link error on Windows for the latest vcpkg.
+
+## [1.0.0-beta20] - 2020-08-15
+
+### API change list
+
+- Provide users with a method to change the session ID of a session.
+
+### Changed
+
+- Modify parseContentType function.
+
+- Modify the docker file to build release version in docker.
+
+- Set session to requests for websockets.
+
+- Modify parseContentType function.
+
+- Change the return value type of the mktime() function in models.
+
+- Fix compilation warning of sprintf function.
+
+### Fixed
+
+- Fix a bug when saving uploaded files on Windows.
+
+- Fix a mysql issue when connections are lost.
+
+- Resolve an issue when sending big files (>=2gB) on Windows.
+
+- Fix boost::string_view compilation error of MysqlConnection class.
+
+- Set the response Access-Control-Allow-Headers header correctly for CORS.
+
+- Fix a bug in drogon_ctl when creating a model, that causes to write source files multiple times.
+
+## [1.0.0-beta19] - 2020-07-16
+
+### API change list
+
+- Add a method to disable unicode escaping in json string.
+
+- Add a timeout parameter when sending HTTP requests.
+
+- Add the getJsonError method.
+
+### Changed
+
+- Remove the restriction on the location of layout tags in views.
+
+- Add a way to set the character set when creating DbClient objects.
+
+- Make `GET` as the only method for accessing static files.
+
+- Modify the 404 pages generator.
+
+- Modify the DbClient class.
+
+- Optimize the HttpResponse class.
+
+### Fixed
+
+- Properly handle chunked encoding requests.
+
+- Destroy DNS resolver of HttpClient in the correct thread.
+
+- Add the header <cctype> to resolve build errors in VS2017.
+
+## [1.0.0-beta18] - 2020-06-14
+
+### API change list
+
+- Add a new joinpoint of AOP for modification on each HTTP response.
+
+- Add a method for the TERM signal handling.
+
+- Add getContextRef method to the WebSocketConnection class.
+
+### Changed
+
+- Create a class template for publish subscribe pattern.
+
+- Add contribution recommendations.
+
+- Send a close message when closing a web socket connection.
+
+- Add additional formats for getHttpDate function.
+
+- Make app().run() method callable on a non-main thread.
+
+- Add digest filter in examples.
+
+- Use string_view to parse multipart/form-data requests.
+
+### Fixed
+
+- Fix building of ORM on FreeBSD.
+
+- Fix a Mysql connection error on Windows.
+
+- Fix a bug in ListenerManager::getIOLoop().
+
+- Fix the count() method of Mysql ORM.
+
+- Fix a compilation issue on windows.
+
+- Fix model generation for PostgreSQL primary keys.
+
+- Fix a bug with quoted column names in sqlite3 databases.
+
 ## [1.0.0-beta17] - 2020-05-22
 
 ### API change list
@@ -384,7 +620,23 @@ All notable changes to this project will be documented in this file.
 
 ## [1.0.0-beta1] - 2019-06-11
 
-[Unreleased]: https://github.com/an-tao/drogon/compare/v1.0.0-beta17...HEAD
+[Unreleased]: https://github.com/an-tao/drogon/compare/v1.3.0...HEAD
+
+[1.3.0]: https://github.com/an-tao/drogon/compare/v1.2.0...v1.3.0
+
+[1.2.0]: https://github.com/an-tao/drogon/compare/v1.1.0...v1.2.0
+
+[1.1.0]: https://github.com/an-tao/drogon/compare/v1.0.0...v1.1.0
+
+[1.0.0]: https://github.com/an-tao/drogon/compare/v1.0.0-beta21...v1.0.0
+
+[1.0.0-beta21]: https://github.com/an-tao/drogon/compare/v1.0.0-beta20...v1.0.0-beta21
+
+[1.0.0-beta20]: https://github.com/an-tao/drogon/compare/v1.0.0-beta19...v1.0.0-beta20
+
+[1.0.0-beta19]: https://github.com/an-tao/drogon/compare/v1.0.0-beta18...v1.0.0-beta19
+
+[1.0.0-beta18]: https://github.com/an-tao/drogon/compare/v1.0.0-beta17...v1.0.0-beta18
 
 [1.0.0-beta17]: https://github.com/an-tao/drogon/compare/v1.0.0-beta16...v1.0.0-beta17
 

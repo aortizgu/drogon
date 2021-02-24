@@ -1,20 +1,32 @@
 cmake_minimum_required(VERSION 3.5)
 
 project(drogon)
+
 message(STATUS "compiler: " ${CMAKE_CXX_COMPILER_ID})
-option(BUILD_CTL "Build drogon_ctl" ON)
-option(BUILD_EXAMPLES "Build examples" ON)
+include(CheckCXXSourceRuns)
+check_cxx_source_runs(
+        "int main(){return 0;}"
+        not_cross_compiling)
+
+if(not_cross_compiling)
+  set(BUILD_PROGRAMS ON)
+else()
+  set(BUILD_PROGRAMS OFF)
+endif()
+
+option(BUILD_CTL "Build drogon_ctl" ${BUILD_PROGRAMS})
+option(BUILD_EXAMPLES "Build examples" ${BUILD_PROGRAMS})
 option(BUILD_ORM "Build orm" ON)
 option(COZ_PROFILING "Use coz for profiling" OFF)
 option(LIBPQ_BATCH_MODE "Use batch mode for libpq" ON)
 option(BUILD_DROGON_SHARED "Build drogon as a shared lib" OFF)
 
 set(DROGON_MAJOR_VERSION 1)
-set(DROGON_MINOR_VERSION 0)
+set(DROGON_MINOR_VERSION 3)
 set(DROGON_PATCH_VERSION 0)
 set(DROGON_VERSION
     ${DROGON_MAJOR_VERSION}.${DROGON_MINOR_VERSION}.${DROGON_PATCH_VERSION})
-set(DROGON_VERSION_STRING "${DROGON_VERSION}.beta17")
+set(DROGON_VERSION_STRING "${DROGON_VERSION}")
 
 # Offer the user the choice of overriding the installation directories
 set(INSTALL_LIB_DIR lib CACHE PATH "Installation directory for libraries")
@@ -30,6 +42,13 @@ set(INSTALL_DROGON_CMAKE_DIR
 if(BUILD_DROGON_SHARED)
   set(BUILD_TRANTOR_SHARED TRUE)
   set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+  set(CMAKE_THREAD_LIBS_INIT "-lpthread")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
+  set(CMAKE_HAVE_THREADS_LIBRARY 1)
+  set(CMAKE_USE_WIN32_THREADS_INIT 0)
+  set(CMAKE_USE_PTHREADS_INIT 1)
+  set(THREADS_PREFER_PTHREAD_FLAG ON)
+  # set(BUILD_EXAMPLES FALSE)
   list(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES
             "${CMAKE_INSTALL_PREFIX}/${INSTALL_LIB_DIR}" isSystemDir)
   if("${isSystemDir}" STREQUAL "-1")
@@ -40,15 +59,19 @@ else(BUILD_DROGON_SHARED)
   add_library(${PROJECT_NAME} STATIC)
 endif(BUILD_DROGON_SHARED)
 
+include(cmake/DrogonUtilities.cmake)
 include(CheckIncludeFileCXX)
 
 check_include_file_cxx(any HAS_ANY)
 check_include_file_cxx(string_view HAS_STRING_VIEW)
-if(HAS_ANY AND HAS_STRING_VIEW)
+check_include_file_cxx(coroutine HAS_COROUTINE)
+if(HAS_ANY AND HAS_STRING_VIEW AND HAS_COROUTINE)
+  set(DROGON_CXX_STANDARD 20)
+elseif(HAS_ANY AND HAS_STRING_VIEW)
   set(DROGON_CXX_STANDARD 17)
-else(HAS_ANY AND HAS_STRING_VIEW)
+else()
   set(DROGON_CXX_STANDARD 14)
-endif(HAS_ANY AND HAS_STRING_VIEW)
+endif()
 
 target_include_directories(
   ${PROJECT_NAME}
@@ -69,21 +92,25 @@ add_subdirectory(trantor)
 target_link_libraries(${PROJECT_NAME} PUBLIC trantor)
 
 if(NOT WIN32)
-  target_link_libraries(${PROJECT_NAME} PRIVATE dl)
+  if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "OpenBSD")
+    target_link_libraries(${PROJECT_NAME} PRIVATE dl)
+  endif(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "OpenBSD")
 else(NOT WIN32)
   target_link_libraries(${PROJECT_NAME} PRIVATE shlwapi)
 endif(NOT WIN32)
 
-if(DROGON_CXX_STANDARD LESS 17)
+if(DROGON_CXX_STANDARD EQUAL 14)
   # With C++14, use boost to support any and string_view
   message(STATUS "use c++14")
   find_package(Boost 1.61.0 REQUIRED)
   message(STATUS "boost include dir:" ${Boost_INCLUDE_DIR})
   target_link_libraries(${PROJECT_NAME} PUBLIC Boost::boost)
   list(APPEND INCLUDE_DIRS_FOR_DYNAMIC_VIEW ${Boost_INCLUDE_DIR})
-else(DROGON_CXX_STANDARD LESS 17)
+elseif(DROGON_CXX_STANDARD EQUAL 17)
   message(STATUS "use c++17")
-endif(DROGON_CXX_STANDARD LESS 17)
+else()
+  message(STATUS "use c++20")
+endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules/)
 
@@ -92,7 +119,7 @@ find_package(Jsoncpp REQUIRED)
 target_link_libraries(${PROJECT_NAME} PUBLIC Jsoncpp_lib)
 list(APPEND INCLUDE_DIRS_FOR_DYNAMIC_VIEW ${JSONCPP_INCLUDE_DIRS})
 
-if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD" AND NOT WIN32)
+if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD" AND NOT ${CMAKE_SYSTEM_NAME} STREQUAL "OpenBSD" AND NOT WIN32)
   find_package(UUID REQUIRED)
   target_link_libraries(${PROJECT_NAME} PRIVATE UUID_lib)
 
@@ -109,7 +136,7 @@ if(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD" AND NOT WIN32)
   else()
     message(FATAL_ERROR "uuid lib error")
   endif()
-endif(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD" AND NOT WIN32)
+endif(NOT ${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD" AND NOT ${CMAKE_SYSTEM_NAME} STREQUAL "OpenBSD" AND NOT WIN32)
 
 find_package(Brotli)
 if(Brotli_FOUND)
@@ -129,6 +156,7 @@ set(DROGON_SOURCES
     lib/src/HttpAppFrameworkImpl.cc
     lib/src/HttpClientImpl.cc
     lib/src/HttpControllersRouter.cc
+    lib/src/HttpFileImpl.cc
     lib/src/HttpFileUploadRequest.cc
     lib/src/HttpRequestImpl.cc
     lib/src/HttpRequestParser.cc
@@ -193,11 +221,6 @@ if(BUILD_ORM)
     set(DROGON_SOURCES ${DROGON_SOURCES}
                        orm_lib/src/mysql_impl/MysqlConnection.cc
                        orm_lib/src/mysql_impl/MysqlResultImpl.cc)
-  else(MySQL_FOUND)
-    if(MSVC)
-      find_package(ZLIB REQUIRED)
-      target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
-    endif(MSVC)
   endif(MySQL_FOUND)
 
   # Find sqlite3.
@@ -210,10 +233,8 @@ if(BUILD_ORM)
   endif(SQLite3_FOUND)
 endif(BUILD_ORM)
 
-if((NOT MSVC) OR (NOT BUILD_ORM))
-  find_package(ZLIB REQUIRED)
-  target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
-endif((NOT MSVC) OR (NOT BUILD_ORM))
+find_package(ZLIB REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE ZLIB::ZLIB)
 
 find_package(OpenSSL)
 if(OpenSSL_FOUND)
@@ -229,6 +250,12 @@ execute_process(COMMAND "git" rev-parse HEAD
                 ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
 configure_file("${PROJECT_SOURCE_DIR}/cmake/templates/version.h.in"
                "${PROJECT_SOURCE_DIR}/lib/inc/drogon/version.h" @ONLY)
+
+if(DROGON_CXX_STANDARD EQUAL 20)
+  option(USE_COROUTINE "Enable C++20 coroutine support" ON)
+else(DROGON_CXX_STANDARD EQUAL 20)
+  option(USE_COROUTINE "Enable C++20 coroutine support" OFF)
+endif(DROGON_CXX_STANDARD EQUAL 20)
 
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
@@ -257,6 +284,7 @@ if(pg_FOUND OR MySQL_FOUND OR SQLite3_FOUND)
       orm_lib/src/DbClientImpl.cc
       orm_lib/src/DbClientLockFree.cc
       orm_lib/src/DbClientManager.cc
+      orm_lib/src/DbConnection.cc
       orm_lib/src/Exception.cc
       orm_lib/src/Field.cc
       orm_lib/src/Result.cc
@@ -392,6 +420,7 @@ set(ORM_HEADERS
     orm_lib/inc/drogon/orm/ArrayParser.h
     orm_lib/inc/drogon/orm/Criteria.h
     orm_lib/inc/drogon/orm/DbClient.h
+    orm_lib/inc/drogon/orm/DbTypes.h
     orm_lib/inc/drogon/orm/Exception.h
     orm_lib/inc/drogon/orm/Field.h
     orm_lib/inc/drogon/orm/FunctionTraits.h
@@ -409,6 +438,8 @@ set(DROGON_UTIL_HEADERS
     lib/inc/drogon/utils/Utilities.h
     lib/inc/drogon/utils/any.h
     lib/inc/drogon/utils/string_view.h
+    lib/inc/drogon/utils/optional.h
+    lib/inc/drogon/utils/coroutine.h
     lib/inc/drogon/utils/HttpConstraint.h
     lib/inc/drogon/utils/OStringStream.h)
 install(FILES ${DROGON_UTIL_HEADERS}
@@ -454,6 +485,7 @@ install(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/Findpg.cmake"
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/FindBrotli.cmake"
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules/Findcoz-profiler.cmake"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DrogonUtilities.cmake"
   DESTINATION "${INSTALL_DROGON_CMAKE_DIR}"
   COMPONENT dev)
 

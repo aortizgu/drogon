@@ -1,6 +1,6 @@
 /**
  *
- *  HttpResponseImpl.h
+ *  @file HttpResponseImpl.h
  *  An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
@@ -132,27 +132,13 @@ class HttpResponseImpl : public HttpResponse
         return contentType_;
     }
 
-    virtual const std::string &getHeader(const std::string &key) const override
-    {
-        auto field = key;
-        transform(field.begin(), field.end(), field.begin(), ::tolower);
-        return getHeaderBy(field);
-    }
-
-    virtual const std::string &getHeader(std::string &&key) const override
+    virtual const std::string &getHeader(std::string key) const override
     {
         transform(key.begin(), key.end(), key.begin(), ::tolower);
         return getHeaderBy(key);
     }
 
-    virtual void removeHeader(const std::string &key) override
-    {
-        auto field = key;
-        transform(field.begin(), field.end(), field.begin(), ::tolower);
-        removeHeaderBy(field);
-    }
-
-    virtual void removeHeader(std::string &&key) override
+    virtual void removeHeader(std::string key) override
     {
         transform(key.begin(), key.end(), key.begin(), ::tolower);
         removeHeaderBy(key);
@@ -177,22 +163,20 @@ class HttpResponseImpl : public HttpResponse
 
     void removeHeaderBy(const std::string &lowerKey)
     {
+        fullHeaderString_.reset();
         headers_.erase(lowerKey);
     }
 
-    virtual void addHeader(const std::string &key,
-                           const std::string &value) override
+    virtual void addHeader(std::string field, const std::string &value) override
     {
         fullHeaderString_.reset();
-        auto field = key;
         transform(field.begin(), field.end(), field.begin(), ::tolower);
         headers_[std::move(field)] = value;
     }
 
-    virtual void addHeader(const std::string &key, std::string &&value) override
+    virtual void addHeader(std::string field, std::string &&value) override
     {
         fullHeaderString_.reset();
-        auto field = key;
         transform(field.begin(), field.end(), field.begin(), ::tolower);
         headers_[std::move(field)] = std::move(value);
     }
@@ -240,10 +224,18 @@ class HttpResponseImpl : public HttpResponse
     virtual void setBody(const std::string &body) override
     {
         bodyPtr_ = std::make_shared<HttpMessageStringBody>(body);
+        if (passThrough_)
+        {
+            addHeader("content-length", std::to_string(bodyPtr_->length()));
+        }
     }
     virtual void setBody(std::string &&body) override
     {
         bodyPtr_ = std::make_shared<HttpMessageStringBody>(std::move(body));
+        if (passThrough_)
+        {
+            addHeader("content-length", std::to_string(bodyPtr_->length()));
+        }
     }
 
     void redirect(const std::string &url)
@@ -270,25 +262,28 @@ class HttpResponseImpl : public HttpResponse
         return expriedTime_;
     }
 
-    virtual const std::string &body() const override
+    virtual const char *getBodyData() const override
     {
-        if (!bodyPtr_)
+        if (!flagForSerializingJson_ && jsonPtr_)
         {
-            bodyPtr_ = std::make_shared<HttpMessageStringBody>();
+            generateBodyFromJson();
         }
-        return bodyPtr_->getString();
+        else if (!bodyPtr_)
+        {
+            return nullptr;
+        }
+        return bodyPtr_->data();
     }
-    virtual std::string &body() override
+    virtual size_t getBodyLength() const override
     {
-        if (!bodyPtr_)
-        {
-            bodyPtr_ = std::make_shared<HttpMessageStringBody>();
-        }
-        return bodyPtr_->getString();
+        if (bodyPtr_)
+            return bodyPtr_->length();
+        return 0;
     }
+
     void swap(HttpResponseImpl &that) noexcept;
     void parseJson() const;
-    virtual const std::shared_ptr<Json::Value> jsonObject() const override
+    virtual const std::shared_ptr<Json::Value> &jsonObject() const override
     {
         // Not multi-thread safe but good, because we basically call this
         // function in a single thread
@@ -299,17 +294,27 @@ class HttpResponseImpl : public HttpResponse
         }
         return jsonPtr_;
     }
+    virtual const std::string &getJsonError() const override
+    {
+        const static std::string none{""};
+        if (jsonParsingErrorPtr_)
+            return *jsonParsingErrorPtr_;
+        return none;
+    }
     void setJsonObject(const Json::Value &pJson)
     {
         flagForParsingJson_ = true;
+        flagForSerializingJson_ = false;
         jsonPtr_ = std::make_shared<Json::Value>(pJson);
     }
     void setJsonObject(Json::Value &&pJson)
     {
         flagForParsingJson_ = true;
+        flagForSerializingJson_ = false;
         jsonPtr_ = std::make_shared<Json::Value>(std::move(pJson));
     }
-    void generateBodyFromJson();
+    bool shouldBeCompressed() const;
+    void generateBodyFromJson() const;
     const std::string &sendfileName() const
     {
         return sendfileName_;
@@ -330,9 +335,10 @@ class HttpResponseImpl : public HttpResponse
         {
             auto gunzipBody =
                 utils::gzipDecompress(bodyPtr_->data(), bodyPtr_->length());
-            removeHeader("content-encoding");
+            removeHeaderBy("content-encoding");
             bodyPtr_ =
                 std::make_shared<HttpMessageStringBody>(move(gunzipBody));
+            addHeader("content-length", std::to_string(bodyPtr_->length()));
         }
     }
 #ifdef USE_BROTLI
@@ -342,9 +348,10 @@ class HttpResponseImpl : public HttpResponse
         {
             auto gunzipBody =
                 utils::brotliDecompress(bodyPtr_->data(), bodyPtr_->length());
-            removeHeader("content-encoding");
+            removeHeaderBy("content-encoding");
             bodyPtr_ =
                 std::make_shared<HttpMessageStringBody>(move(gunzipBody));
+            addHeader("content-length", std::to_string(bodyPtr_->length()));
         }
     }
 #endif
@@ -357,6 +364,10 @@ class HttpResponseImpl : public HttpResponse
     virtual void setBody(const char *body, size_t len) override
     {
         bodyPtr_ = std::make_shared<HttpMessageStringViewBody>(body, len);
+        if (passThrough_)
+        {
+            addHeader("content-length", std::to_string(bodyPtr_->length()));
+        }
     }
     virtual void setContentTypeCodeAndCustomString(
         ContentType type,
@@ -377,9 +388,6 @@ class HttpResponseImpl : public HttpResponse
     trantor::Date creationDate_;
     Version version_{Version::kHttp11};
     bool closeConnection_{false};
-
-    size_t leftBodyLength_{0};
-    size_t currentChunkLength_{0};
     mutable std::shared_ptr<HttpMessageBody> bodyPtr_;
     ssize_t expriedTime_{-1};
     std::string sendfileName_;
@@ -390,10 +398,12 @@ class HttpResponseImpl : public HttpResponse
     mutable size_t datePos_{static_cast<size_t>(-1)};
     mutable int64_t httpStringDate_{-1};
     mutable bool flagForParsingJson_{false};
+    mutable bool flagForSerializingJson_{true};
     mutable ContentType contentType_{CT_TEXT_PLAIN};
     mutable bool flagForParsingContentType_{false};
+    mutable std::shared_ptr<std::string> jsonParsingErrorPtr_;
     string_view contentTypeString_{
-        "Content-Type: text/html; charset=utf-8\r\n"};
+        "content-type: text/html; charset=utf-8\r\n"};
     bool passThrough_{false};
     void setContentType(const string_view &contentType)
     {

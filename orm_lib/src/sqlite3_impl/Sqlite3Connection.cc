@@ -1,7 +1,7 @@
 /**
  *
- *  Sqlite3Connection.cc
- *  An Tao
+ *  @file Sqlite3Connection.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -17,6 +17,7 @@
 #include <drogon/utils/Utilities.h>
 #include <drogon/utils/string_view.h>
 #include <regex>
+#include <cctype>
 
 using namespace drogon;
 using namespace drogon::orm;
@@ -54,21 +55,12 @@ Sqlite3Connection::Sqlite3Connection(
         }
     });
     // Get the key and value
-    std::regex r(" *= *");
-    auto tmpStr = std::regex_replace(connInfo, r, "=");
-    std::string host, user, passwd, dbname, port;
-    auto keyValues = utils::splitString(tmpStr, " ");
+    auto connParams = parseConnString(connInfo);
     std::string filename;
-    for (auto const &kvs : keyValues)
+    for (auto const &kv : connParams)
     {
-        auto kv = utils::splitString(kvs, "=");
-        assert(kv.size() == 2);
-        auto key = kv[0];
-        auto value = kv[1];
-        if (value[0] == '\'' && value[value.length() - 1] == '\'')
-        {
-            value = value.substr(1, value.length() - 2);
-        }
+        auto key = kv.first;
+        auto value = kv.second;
         std::transform(key.begin(), key.end(), key.begin(), tolower);
         if (key == "filename")
         {
@@ -78,7 +70,7 @@ Sqlite3Connection::Sqlite3Connection(
     loop_->runInLoop([this, filename = std::move(filename)]() {
         sqlite3 *tmp = nullptr;
         auto ret = sqlite3_open(filename.data(), &tmp);
-        connectionPtr_ = std::shared_ptr<sqlite3>(tmp, [=](sqlite3 *ptr) {
+        connectionPtr_ = std::shared_ptr<sqlite3>(tmp, [](sqlite3 *ptr) {
             sqlite3_close(ptr);
         });
         auto thisPtr = shared_from_this();
@@ -105,7 +97,7 @@ void Sqlite3Connection::execSql(
     std::function<void(const std::exception_ptr &)> &&exceptCallback)
 {
     auto thisPtr = shared_from_this();
-    loopThread_.getLoop()->runInLoop(
+    loopThread_.getLoop()->queueInLoop(
         [thisPtr,
          sql = std::move(sql),
          paraNum,
@@ -265,7 +257,7 @@ void Sqlite3Connection::execSqlInQueue(
     if (paraNum > 0 && newStmt)
     {
         auto r = stmts_.insert(std::string{sql});
-        stmtsMap_[std::string{r.first->data(), r.first->length()}] = stmtPtr;
+        stmtsMap_[string_view{r.first->data(), r.first->length()}] = stmtPtr;
     }
     rcb(Result(resultPtr));
     idleCb_();

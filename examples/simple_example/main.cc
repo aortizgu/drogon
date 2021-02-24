@@ -214,6 +214,8 @@ int main()
     std::string opaque("drogonOpaque");
     // Load configuration
     app().loadConfigFile("config.example.json");
+    app().setImplicitPageEnable(true);
+    app().setImplicitPage("page.html");
     auto &json = app().getCustomConfig();
     if (json.empty())
     {
@@ -304,7 +306,7 @@ int main()
             auto resp = HttpResponse::newHttpResponse();
             resp->setBody("Hello, World!");
             resp->setContentTypeCodeAndCustomString(
-                CT_TEXT_PLAIN, "Content-Type: text/plain\r\n");
+                CT_TEXT_PLAIN, "content-type: text/plain\r\n");
             return resp;
         }
         return nullResp;
@@ -334,6 +336,9 @@ int main()
             case Head:
                 std::cout << " (Head) ";
                 break;
+            case Patch:
+                std::cout << " (PATCH) ";
+                break;
             default:
                 break;
         }
@@ -342,6 +347,14 @@ int main()
     auto resp = HttpResponse::newFileResponse("index.html");
     resp->setExpiredTime(0);
     app().setCustom404Page(resp);
+    app().addListener("0.0.0.0", 0);
+    app().registerBeginningAdvice([]() {
+        auto addresses = app().getListeners();
+        for (auto &address : addresses)
+        {
+            LOG_INFO << address.toIpPort() << " LISTEN";
+        }
+    });
     std::cout << "Date: "
               << std::string{drogon::utils::getHttpFullDate(
                      trantor::Date::now())}

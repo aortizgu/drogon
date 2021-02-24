@@ -265,6 +265,10 @@ void WebsocketControllersRouter::doControllerHandler(
         {
             methods.append("DELETE,");
         }
+        if (routerItem.binders_[Patch] && routerItem.binders_[Patch]->isCORS_)
+        {
+            methods.append("PATCH,");
+        }
         methods.resize(methods.length() - 1);
         resp->addHeader("ALLOW", methods);
 
@@ -278,8 +282,11 @@ void WebsocketControllersRouter::doControllerHandler(
             resp->addHeader("Access-Control-Allow-Origin", origin);
         }
         resp->addHeader("Access-Control-Allow-Methods", methods);
-        resp->addHeader("Access-Control-Allow-Headers",
-                        "x-requested-with,content-type");
+        auto &headers = req->getHeaderBy("access-control-request-headers");
+        if (!headers.empty())
+        {
+            resp->addHeader("Access-Control-Allow-Headers", headers);
+        }
         callback(resp);
         return;
     }

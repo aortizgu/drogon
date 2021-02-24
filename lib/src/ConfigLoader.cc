@@ -1,7 +1,7 @@
 /**
  *
- *  ConfigLoader.cc
- *  An Tao
+ *  @file ConfigLoader.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -130,6 +130,13 @@ ConfigLoader::ConfigLoader(const std::string &configFile)
         }
     }
 }
+ConfigLoader::ConfigLoader(const Json::Value &data) : configJsonRoot_(data)
+{
+}
+ConfigLoader::ConfigLoader(Json::Value &&data)
+    : configJsonRoot_(std::move(data))
+{
+}
 ConfigLoader::~ConfigLoader()
 {
 }
@@ -201,6 +208,10 @@ static void loadControllers(const Json::Value &controllers)
                 else if (strMethod == "delete")
                 {
                     constraints.push_back(Delete);
+                }
+                else if (strMethod == "patch")
+                {
+                    constraints.push_back(Patch);
                 }
             }
         }
@@ -363,6 +374,17 @@ static void loadApp(const Json::Value &app)
         }
     }
 #endif
+    auto unicodeEscaping =
+        app.get("enable_unicode_escaping_in_json", true).asBool();
+    drogon::app().setUnicodeEscapingInJson(unicodeEscaping);
+    auto &precision = app["float_precision_in_json"];
+    if (!precision.isNull())
+    {
+        auto precisionLength = precision.get("precision", 0).asUInt64();
+        auto precisionType =
+            precision.get("precision_type", "significant").asString();
+        drogon::app().setFloatPrecisionInJson(precisionLength, precisionType);
+    }
     // log
     loadLogSetting(app["log"]);
     // run as daemon
@@ -438,7 +460,12 @@ static void loadApp(const Json::Value &app)
                   << std::endl;
         exit(1);
     }
+    drogon::app().enableReusePort(app.get("reuse_port", false).asBool());
     drogon::app().setHomePage(app.get("home_page", "index.html").asString());
+    drogon::app().setImplicitPageEnable(
+        app.get("use_implicit_page", true).asBool());
+    drogon::app().setImplicitPage(
+        app.get("implicit_page", "index.html").asString());
 }
 static void loadDbClients(const Json::Value &dbClients)
 {
@@ -447,10 +474,11 @@ static void loadDbClients(const Json::Value &dbClients)
     for (auto const &client : dbClients)
     {
         auto type = client.get("rdbms", "postgresql").asString();
+        std::transform(type.begin(), type.end(), type.begin(), ::tolower);
         auto host = client.get("host", "127.0.0.1").asString();
         auto port = client.get("port", 5432).asUInt();
         auto dbname = client.get("dbname", "").asString();
-        if (dbname == "")
+        if (dbname == "" && type != "sqlite3")
         {
             std::cerr << "Please configure dbname in the configuration file"
                       << std::endl;
@@ -466,6 +494,11 @@ static void loadDbClients(const Json::Value &dbClients)
         auto name = client.get("name", "default").asString();
         auto filename = client.get("filename", "").asString();
         auto isFast = client.get("is_fast", false).asBool();
+        auto characterSet = client.get("characterSet", "").asString();
+        if (characterSet.empty())
+        {
+            characterSet = client.get("client_encoding", "").asString();
+        }
         drogon::app().createDbClient(type,
                                      host,
                                      (unsigned short)port,
@@ -475,7 +508,8 @@ static void loadDbClients(const Json::Value &dbClients)
                                      connNum,
                                      filename,
                                      name,
-                                     isFast);
+                                     isFast,
+                                     characterSet);
     }
 }
 static void loadListeners(const Json::Value &listeners)
@@ -490,8 +524,9 @@ static void loadListeners(const Json::Value &listeners)
         auto useSSL = listener.get("https", false).asBool();
         auto cert = listener.get("cert", "").asString();
         auto key = listener.get("key", "").asString();
+        auto useOldTLS = listener.get("use_old_tls", false).asBool();
         LOG_TRACE << "Add listener:" << addr << ":" << port;
-        drogon::app().addListener(addr, port, useSSL, cert, key);
+        drogon::app().addListener(addr, port, useSSL, cert, key, useOldTLS);
     }
 }
 static void loadSSL(const Json::Value &sslFiles)

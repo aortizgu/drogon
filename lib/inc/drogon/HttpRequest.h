@@ -1,6 +1,6 @@
 /**
  *
- *  HttpRequest.h
+ *  @file HttpRequest.h
  *  An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
@@ -116,15 +116,30 @@ class HttpRequest
         return method();
     }
 
-    /// Get the header string identified by the field parameter
-    virtual const std::string &getHeader(const std::string &field) const = 0;
+    /// Get the header string identified by the key parameter.
+    /**
+     * @note
+     * If there is no the header, a empty string is retured.
+     * The key is case insensitive
+     */
+    virtual const std::string &getHeader(std::string key) const = 0;
 
-    /// Get the header string identified by the field parameter
-    virtual const std::string &getHeader(std::string &&field) const = 0;
+    /**
+     * @brief Set the header string identified by the field parameter
+     *
+     * @param field The field parameter is transformed to lower case before
+     * storing.
+     * @param value The value of the header.
+     */
+    virtual void addHeader(std::string field, const std::string &value) = 0;
+    virtual void addHeader(std::string field, std::string &&value) = 0;
 
-    /// Set the header string identified by the field parameter
-    virtual void addHeader(const std::string &field,
-                           const std::string &value) = 0;
+    /**
+     * @brief  Remove the header identified by the key parameter.
+     *
+     * @param key The key is case insensitive
+     */
+    virtual void removeHeader(std::string key) = 0;
 
     /// Get the cookie string identified by the field parameter
     virtual const std::string &getCookie(const std::string &field) const = 0;
@@ -221,10 +236,10 @@ class HttpRequest
     }
 
     /// Get the session to which the request belongs.
-    virtual SessionPtr session() const = 0;
+    virtual const SessionPtr &session() const = 0;
 
     /// Get the session to which the request belongs.
-    SessionPtr getSession() const
+    const SessionPtr &getSession() const
     {
         return session();
     }
@@ -280,13 +295,23 @@ class HttpRequest
      * string (the part after the question mark in the URI) must be empty,
      * otherwise the method returns an empty shared_ptr object.
      */
-    virtual const std::shared_ptr<Json::Value> jsonObject() const = 0;
+    virtual const std::shared_ptr<Json::Value> &jsonObject() const = 0;
 
     /// Get the Json object of the request
-    const std::shared_ptr<Json::Value> getJsonObject() const
+    const std::shared_ptr<Json::Value> &getJsonObject() const
     {
         return jsonObject();
     }
+
+    /**
+     * @brief Get the error message of parsing the JSON body received from peer.
+     * This method usually is called after getting a empty shared_ptr object
+     * by the getJsonObject() method.
+     *
+     * @return const std::string& The error message. An empty string is returned
+     * when no error occurs.
+     */
+    virtual const std::string &getJsonError() const = 0;
 
     /// Get the content type
     virtual ContentType contentType() const = 0;
@@ -320,9 +345,9 @@ class HttpRequest
     /**
      * @brief Set the request object to the pass-through mode or not. It's not
      * by default when a new request object is created.
-     * In pass-through mode, no addtional headers (including server, date,
-     * content-type and content-length, etc.) are added to the request. This
-     * mode is useful for some applications such as a proxy.
+     * In pass-through mode, no addtional headers (including user-agent,
+     * connection, etc.) are added to the request. This mode is useful for some
+     * applications such as a proxy.
      *
      * @param flag
      */

@@ -14,6 +14,8 @@
  */
 #include <drogon/config.h>
 #include <drogon/orm/DbClient.h>
+#include <drogon/orm/DbTypes.h>
+#include <drogon/orm/CoroMapper.h>
 #include <trantor/utils/Logger.h>
 #include <chrono>
 #include <iostream>
@@ -31,9 +33,15 @@ using namespace drogon::orm;
 #define RED "\033[31m"   /* Red */
 #define GREEN "\033[32m" /* Green */
 
-constexpr int postgre_tests = 41;
-constexpr int mysql_tests = 43;
-constexpr int sqlite_tests = 46;
+#ifdef __cpp_impl_coroutine
+constexpr int postgre_tests = 50;
+constexpr int mysql_tests = 47;
+constexpr int sqlite_tests = 52;
+#else
+constexpr int postgre_tests = 44;
+constexpr int mysql_tests = 45;
+constexpr int sqlite_tests = 47;
+#endif
 
 int test_count = 0;
 int counter = 0;
@@ -119,12 +127,12 @@ void doPostgreTest(const drogon::orm::DbClientPtr &clientPtr)
                        "postgresql - DbClient streaming-type interface(0)");
         };
     /// 1.2 insert,blocking
-    *clientPtr << "insert into users (user_id,user_name,password,org_name) "
-                  "values($1,$2,$3,$4) returning *"
-               << "pg1"
-               << "postgresql1"
-               << "123"
-               << "default" << Mode::Blocking >>
+    *clientPtr
+            << "insert into users (user_id,user_name,admin,password,org_name) "
+               "values($1,$2,$3,$4,$5) returning *"
+            << "pg1"
+            << "postgresql1" << drogon::orm::DefaultValue{} << "123"
+            << "default" << Mode::Blocking >>
         [](const Result &r) {
             // std::cout << "id=" << r[0]["id"].as<int64_t>() << std::endl;
             testOutput(r[0]["id"].as<int64_t>() == 2,
@@ -650,13 +658,30 @@ void doPostgreTest(const drogon::orm::DbClientPtr &clientPtr)
             testOutput(false,
                        "postgresql - ORM mapper asynchronous interface(0)");
         });
+
+    /// 6.1.5 insert future
+    user.setUserId("pg_future");
+    auto fu = mapper.insertFuture(user);
+    try
+    {
+        auto u = fu.get();
+        testOutput(true,
+                   "postgresql - ORM mapper asynchronous future interface(0)");
+    }
+    catch (const DrogonDbException &e)
+    {
+        std::cerr << e.base().what() << std::endl;
+        testOutput(false,
+                   "postgresql - ORM mapper asynchronous future interface(0)");
+    }
+
     /// 6.2 insert
     user.setUserId("pg1");
     user.setUserName("postgres1");
     mapper.insert(
         user,
         [](Users ret) {
-            testOutput(ret.getPrimaryKey() == 2,
+            testOutput(ret.getPrimaryKey() == 3,
                        "postgresql - ORM mapper asynchronous interface(1)");
         },
         [](const DrogonDbException &e) {
@@ -678,18 +703,124 @@ void doPostgreTest(const drogon::orm::DbClientPtr &clientPtr)
             testOutput(false,
                        "postgresql - ORM mapper asynchronous interface(2)");
         });
-
+    /// 6.3.5 count
+    mapper.count(
+        drogon::orm::Criteria(Users::Cols::_id, CompareOperator::EQ, 2020),
+        [](const size_t c) {
+            testOutput(c == 0,
+                       "postgresql - ORM mapper asynchronous interface(3)");
+        },
+        [](const DrogonDbException &e) {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false,
+                       "postgresql - ORM mapper asynchronous interface(3)");
+        });
     /// 6.4 find by primary key. blocking
     try
     {
         auto user = mapper.findByPrimaryKey(2);
-        testOutput(true, "postgresql - ORM mapper asynchronous interface(3)");
+        testOutput(true, "postgresql - ORM mapper synchronous interface(0)");
+        Users newUser;
+        newUser.setId(user.getValueOfId());
+        newUser.setSalt("xxx");
+        auto c = mapper.update(newUser);
+        testOutput(c == 1, "postgresql - ORM mapper synchronous interface(1)");
     }
     catch (const DrogonDbException &e)
     {
         std::cerr << e.base().what() << std::endl;
-        testOutput(false, "postgresql - ORM mapper asynchronous interface(3)");
+        testOutput(false, "postgresql - ORM mapper synchronous interface(0)");
     }
+#ifdef __cpp_impl_coroutine
+    auto coro_test = [clientPtr]() -> drogon::Task<> {
+        /// 7 Test coroutines.
+        /// This is by no means comprehensive. But coroutine API is esentially a
+        /// wrapper arround callbacks. The purpose is to test the interface
+        /// works 7.1 Basic queries
+        try
+        {
+            auto result =
+                co_await clientPtr->execSqlCoro("select * from users;");
+            testOutput(result.size() != 0,
+                       "postgresql - DbClient coroutine interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "postgresql - DbClient coroutine interface(0)");
+        }
+        /// 7.2 Parameter binding
+        try
+        {
+            auto result = co_await clientPtr->execSqlCoro(
+                "select * from users where 1=$1;", 1);
+            testOutput(result.size() != 0,
+                       "postgresql - DbClient coroutine interface(1)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "postgresql - DbClient coroutine interface(1)");
+        }
+        /// 7.3 CoroMapper
+        try
+        {
+            CoroMapper<Users> mapper(clientPtr);
+            auto user = co_await mapper.findByPrimaryKey(2);
+            testOutput(true, "postgresql - ORM mapper coroutine interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << "error";
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false,
+                       "postgresql - ORM mapper coroutine  interface(0)");
+        }
+        try
+        {
+            CoroMapper<Users> mapper(clientPtr);
+            auto user = co_await mapper.findByPrimaryKey(314);
+            testOutput(false, "postgresql - ORM mapper coroutine interface(1)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(true, "postgresql - ORM mapper coroutine  interface(1)");
+        }
+        try
+        {
+            CoroMapper<Users> mapper(clientPtr);
+            auto users = co_await mapper.findAll();
+            auto count = co_await mapper.count();
+            testOutput(users.size() == count,
+                       "postgresql - ORM mapper coroutine  interface(2)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(true, "postgresql - ORM mapper coroutine  interface(2)");
+        }
+        /// 7.4 Transactions
+        try
+        {
+            auto trans = co_await clientPtr->newTransactionCoro();
+            auto result =
+                co_await trans->execSqlCoro("select * from users where 1=$1;",
+                                            1);
+            testOutput(
+                result.size() != 0,
+                "postgresql - DbClient coroutine transaction interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(
+                false,
+                "postgresql - DbClient coroutine transaction interface(0)");
+        }
+    };
+    drogon::sync_wait(coro_test());
+#endif
 }
 
 void doMysqlTest(const drogon::orm::DbClientPtr &clientPtr)
@@ -738,12 +869,13 @@ void doMysqlTest(const drogon::orm::DbClientPtr &clientPtr)
         };
     /// Test1:DbClient streaming-type interface
     /// 1.1 insert,non-blocking
-    *clientPtr << "insert into users (user_id,user_name,password,org_name) "
-                  "values(?,?,?,?)"
-               << "pg"
-               << "postgresql"
-               << "123"
-               << "default" >>
+    *clientPtr
+            << "insert into users (user_id,user_name,password,org_name,admin) "
+               "values(?,?,?,?,?)"
+            << "pg"
+            << "postgresql"
+            << "123"
+            << "default" << drogon::orm::DefaultValue{} >>
         [](const Result &r) {
             testOutput(r.insertId() == 1,
                        "mysql - DbClient streaming-type interface(0)");
@@ -1255,6 +1387,16 @@ void doMysqlTest(const drogon::orm::DbClientPtr &clientPtr)
             std::cerr << e.base().what() << std::endl;
             testOutput(false, "mysql - ORM mapper asynchronous interface(0)");
         });
+    /// 6.1.5 count
+    mapper.count(
+        drogon::orm::Criteria(Users::Cols::_id, CompareOperator::EQ, 1),
+        [](const size_t c) {
+            testOutput(c == 1, "mysql - ORM mapper asynchronous interface(1)");
+        },
+        [](const DrogonDbException &e) {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "mysql - ORM mapper asynchronous interface(1)");
+        });
     /// 6.2 insert
     user.setUserId("pg1");
     user.setUserName("postgres1");
@@ -1262,11 +1404,11 @@ void doMysqlTest(const drogon::orm::DbClientPtr &clientPtr)
         user,
         [](Users ret) {
             testOutput(ret.getPrimaryKey() == 2,
-                       "mysql - ORM mapper asynchronous interface(1)");
+                       "mysql - ORM mapper asynchronous interface(2)");
         },
         [](const DrogonDbException &e) {
             std::cerr << e.base().what() << std::endl;
-            testOutput(false, "mysql - ORM mapper asynchronous interface(1)");
+            testOutput(false, "mysql - ORM mapper asynchronous interface(2)");
         });
     /// 6.3 select where in
     mapper.findBy(
@@ -1275,24 +1417,63 @@ void doMysqlTest(const drogon::orm::DbClientPtr &clientPtr)
                  std::vector<int32_t>{2, 200}),
         [](std::vector<Users> users) {
             testOutput(users.size() == 1,
-                       "mysql - ORM mapper asynchronous interface(2)");
+                       "mysql - ORM mapper asynchronous interface(3)");
         },
         [](const DrogonDbException &e) {
             std::cerr << e.base().what() << std::endl;
-            testOutput(false, "mysql - ORM mapper asynchronous interface(2)");
+            testOutput(false, "mysql - ORM mapper asynchronous interface(3)");
         });
 
     /// 6.4 find by primary key. blocking
     try
     {
         auto user = mapper.findByPrimaryKey(1);
-        testOutput(true, "mysql - ORM mapper asynchronous interface(3)");
+        testOutput(true, "mysql - ORM mapper synchronous interface(0)");
+        Users newUser;
+        newUser.setId(user.getValueOfId());
+        newUser.setSalt("xxx");
+        auto c = mapper.update(newUser);
+        testOutput(c == 1, "mysql - ORM mapper synchronous interface(1)");
     }
     catch (const DrogonDbException &e)
     {
         std::cerr << e.base().what() << std::endl;
-        testOutput(false, "mysql - ORM mapper asynchronous interface(3)");
+        testOutput(false, "mysql - ORM mapper synchronous interface(0)");
     }
+#ifdef __cpp_impl_coroutine
+    auto coro_test = [clientPtr]() -> drogon::Task<> {
+        /// 7 Test coroutines.
+        /// This is by no means comprehensive. But coroutine API is esentially a
+        /// wrapper arround callbacks. The purpose is to test the interface
+        /// works 7.1 Basic queries
+        try
+        {
+            auto result =
+                co_await clientPtr->execSqlCoro("select * from users;");
+            testOutput(result.size() != 0,
+                       "mysql - DbClient coroutine interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "mysql - DbClient coroutine interface(0)");
+        }
+        /// 7.2 Parameter binding
+        try
+        {
+            auto result = co_await clientPtr->execSqlCoro(
+                "select * from users where 1=?;", 1);
+            testOutput(result.size() != 0,
+                       "mysql - DbClient coroutine interface(1)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "mysql - DbClient coroutine interface(1)");
+        }
+    };
+    drogon::sync_wait(coro_test());
+#endif
 }
 
 void doSqliteTest(const drogon::orm::DbClientPtr &clientPtr)
@@ -1917,18 +2098,101 @@ void doSqliteTest(const drogon::orm::DbClientPtr &clientPtr)
             std::cerr << e.base().what() << std::endl;
             testOutput(false, "sqlite3 - ORM mapper asynchronous interface(2)");
         });
-
+    /// 5.3.5 count
+    mapper.count(
+        drogon::orm::Criteria(Users::Cols::_id, CompareOperator::EQ, 2),
+        [](const size_t c) {
+            testOutput(c == 1,
+                       "sqlite3 - ORM mapper asynchronous interface(3)");
+        },
+        [](const DrogonDbException &e) {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - ORM mapper asynchronous interface(3)");
+        });
     /// 5.4 find by primary key. blocking
     try
     {
         auto user = mapper.findByPrimaryKey(1);
-        testOutput(true, "sqlite3 - ORM mapper asynchronous interface(3)");
+        testOutput(true, "sqlite3 - ORM mapper synchronous interface(0)");
     }
     catch (const DrogonDbException &e)
     {
         std::cerr << e.base().what() << std::endl;
-        testOutput(false, "sqlite3 - ORM mapper asynchronous interface(3)");
+        testOutput(false, "sqlite3 - ORM mapper synchronous interface(0)");
     }
+#ifdef __cpp_impl_coroutine
+    auto coro_test = [clientPtr]() -> drogon::Task<> {
+        /// 7 Test coroutines.
+        /// This is by no means comprehensive. But coroutine API is esentially a
+        /// wrapper arround callbacks. The purpose is to test the interface
+        /// works 7.1 Basic queries
+        try
+        {
+            auto result =
+                co_await clientPtr->execSqlCoro("select * from users;");
+            testOutput(result.size() != 0,
+                       "sqlite3 - DbClient coroutine interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - DbClient coroutine interface(0)");
+        }
+        /// 7.2 Parameter binding
+        try
+        {
+            auto result = co_await clientPtr->execSqlCoro(
+                "select * from users where 1=?;", 1);
+            testOutput(result.size() != 0,
+                       "sqlite3 - DbClient coroutine interface(1)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - DbClient coroutine interface(1)");
+        }
+        /// 7.3 ORM CoroMapper
+        try
+        {
+            auto mapper = CoroMapper<Users>(clientPtr);
+            auto user = co_await mapper.findOne(
+                Criteria(Users::Cols::_id, CompareOperator::EQ, 1));
+            testOutput(true, "sqlite3 - CoroMapper coroutine interface(0)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - CoroMapper coroutine interface(0)");
+        }
+        try
+        {
+            auto mapper = CoroMapper<Users>(clientPtr);
+            auto users = co_await mapper.findBy(
+                Criteria(Users::Cols::_id, CompareOperator::EQ, 1));
+            testOutput(users.size() == 1,
+                       "sqlite3 - CoroMapper coroutine interface(1)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - CoroMapper coroutine interface(1)");
+        }
+        try
+        {
+            auto mapper = CoroMapper<Users>(clientPtr);
+            auto n = co_await mapper.deleteByPrimaryKey(1);
+            testOutput(n == 1, "sqlite3 - CoroMapper coroutine interface(2)");
+        }
+        catch (const DrogonDbException &e)
+        {
+            std::cerr << e.base().what() << std::endl;
+            testOutput(false, "sqlite3 - CoroMapper coroutine interface(2)");
+        }
+        co_await drogon::sleepCoro(
+            trantor::EventLoop::getEventLoopOfCurrentThread(), 1.0s);
+    };
+    drogon::sync_wait(coro_test());
+#endif
 }
 
 int main(int argc, char *argv[])
@@ -1936,26 +2200,16 @@ int main(int argc, char *argv[])
     trantor::Logger::setLogLevel(trantor::Logger::kDebug);
 #if USE_POSTGRESQL
     auto postgre_client = DbClient::newPgClient(
-        "host=127.0.0.1 port=5432 dbname=postgres user=postgres", 1);
-    while (!postgre_client->hasAvailableConnections())
-    {
-        std::this_thread::sleep_for(1s);
-    }
+        "host=127.0.0.1 port=5432 dbname=postgres user=postgres password=12345 "
+        "client_encoding=utf8",
+        1);
 #endif
 #if USE_MYSQL
-    auto mysql_client =
-        DbClient::newMysqlClient("host=localhost port=3306 user=root", 1);
-    while (!mysql_client->hasAvailableConnections())
-    {
-        std::this_thread::sleep_for(1s);
-    }
+    auto mysql_client = DbClient::newMysqlClient(
+        "host=localhost port=3306 user=root client_encoding=utf8mb4", 1);
 #endif
 #if USE_SQLITE3
     auto sqlite_client = DbClient::newSqlite3Client("filename=:memory:", 1);
-    while (!sqlite_client->hasAvailableConnections())
-    {
-        std::this_thread::sleep_for(1s);
-    }
 #endif
     LOG_DEBUG << "start!";
     std::this_thread::sleep_for(1s);

@@ -1,17 +1,20 @@
 ![](https://github.com/an-tao/drogon/wiki/images/drogon-white.jpg)
 
 [![Build Status](https://travis-ci.com/an-tao/drogon.svg?branch=master)](https://travis-ci.com/an-tao/drogon)
+![Build Status](https://github.com/an-tao/drogon/workflows/Build%20Drogon/badge.svg?branch=master)
+[![Build status](https://ci.appveyor.com/api/projects/status/12ffuf6j5vankgyb/branch/master?svg=true)](https://ci.appveyor.com/project/an-tao/drogon/branch/master)
 [![Total alerts](https://img.shields.io/lgtm/alerts/g/an-tao/drogon.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/an-tao/drogon/alerts/)
-[![Language grade: C/C++](https://img.shields.io/lgtm/grade/cpp/g/an-tao/drogon.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/an-tao/drogon/context:cpp)
 [![Join the chat at https://gitter.im/drogon-web/community](https://badges.gitter.im/drogon-web/community.svg)](https://gitter.im/drogon-web/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 [![Docker image](https://img.shields.io/badge/Docker-image-blue.svg)](https://cloud.docker.com/u/drogonframework/repository/docker/drogonframework/drogon)
+
+[English](./README.md) | 简体中文 | [繁體中文](./README.zh-TW.md)
 
 **Drogon**是一个基于C++14/17的Http应用框架，使用Drogon可以方便的使用C++构建各种类型的Web应用服务端程序。
 本版本库是github上[Drogon工程](https://github.com/an-tao/drogon)的镜像库。**Drogon**是作者非常喜欢的美剧《权力的游戏》中的一条龙的名字(汉译作卓耿)，和龙有关但并不是dragon的误写，为了不至于引起不必要的误会这里说明一下。
 
-Drogon是一个跨平台框架，它支持Linux，也支持macOS、FreeBSD，和Windows。它的主要特点如下：
+Drogon是一个跨平台框架，它支持Linux，也支持macOS、FreeBSD，OpenBSD，和Windows。它的主要特点如下：
 
-* 网络层使用基于epoll(macOS/FreeBSD下是kqueue)的非阻塞IO框架，提供高并发、高性能的网络IO。详细请见[性能测试](https://github.com/an-tao/drogon/wiki/13-%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95)和[TFB Live Results](https://tfb-status.techempower.com/)；
+* 网络层使用基于epoll(macOS/FreeBSD下是kqueue)的非阻塞IO框架，提供高并发、高性能的网络IO。详细请见[TFB Tests Results](https://www.techempower.com/benchmarks/#section=data-r19&hw=ph&test=composite)；
 * 全异步编程模式；
 * 支持Http1.0/1.1(server端和client端)；
 * 基于template实现了简单的反射机制，使主程序框架、控制器(controller)和视图(view)完全解耦；
@@ -33,10 +36,11 @@ Drogon是一个跨平台框架，它支持Linux，也支持macOS、FreeBSD，和
 * 方便的轻量级ORM实现，支持常规的对象到数据库的双向映射操作；
 * 支持插件，可通过配置文件在加载期动态拆装；
 * 支持内建插入点的AOP
+* 支持C++协程
 
 ## 一个非常简单的例子
 
-不像大多数C++框架那样，drogon的主程序可以保持非常简单。 Drogon使用了一些小技巧是主程序和控制器解耦合. 控制器的路径路由设置可以在控制器类定义中或者配置文件中完成.
+不像大多数C++框架那样，drogon的主程序可以保持非常简单。 Drogon使用了一些小技巧使主程序和控制器解耦合. 控制器的路由设置可以在控制器类中定义或者配置文件中完成.
 
 下面是一个典型的主程序的样子:
 
@@ -68,7 +72,7 @@ int main()
 当然，Drogon也提供了一些接口，使用户可以在main()函数中直接添加控制器逻辑，比如，用户可以注册一个lambda处理器到drogon框架中，如下所示：
 
 ```c++
-app.registerHandler("/test?username={name}",
+app().registerHandler("/test?username={name}",
                     [](const HttpRequestPtr& req,
                        std::function<void (const HttpResponsePtr &)> &&callback,
                        const std::string &name)
@@ -182,8 +186,12 @@ class User : public drogon::HttpController<User>
 
 另外，你可以发现前面所有的处理函数接口都是异步的，处理器的响应是通过回调对象返回的。这种设计是出于对高性能的考虑，因为在异步模式下，可以使用少量的线程（比如和处理器核心数相等的线程）处理大量的并发请求。
 
-编译上述的所有源文件后，我们得到了一个非常简单的web应用程序，这是一个不错的开始。**请访问[wiki](https://github.com/an-tao/drogon/wiki/01-Overview)或者[doxiz](https://doxiz.com/drogon/master/overview/)以获取更多的信息**
+编译上述的所有源文件后，我们得到了一个非常简单的web应用程序，这是一个不错的开始。**请访问[wiki](https://github.com/an-tao/drogon/wiki/CHN-01-概述)或者[doxiz](https://doxiz.com/drogon/master/overview/)以获取更多的信息**
 
 ## 贡献方式
 
 欢迎您的贡献。 请阅读[贡献指南](CONTRIBUTING.md)以获取更多的信息。
+
+## QQ交流群：1137909452
+
+欢迎交流探讨。

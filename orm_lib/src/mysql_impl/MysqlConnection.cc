@@ -1,7 +1,7 @@
 /**
  *
- *  MysqlConnection.cc
- *  An Tao
+ *  @file MysqlConnection.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -15,6 +15,7 @@
 #include "MysqlConnection.h"
 #include "MysqlResultImpl.h"
 #include <algorithm>
+#include <drogon/orm/DbTypes.h>
 #include <drogon/utils/Utilities.h>
 #include <drogon/utils/string_view.h>
 #include <errmsg.h>
@@ -57,20 +58,12 @@ MysqlConnection::MysqlConnection(trantor::EventLoop *loop,
     mysql_options(mysqlPtr_.get(), MYSQL_OPT_NONBLOCK, 0);
 
     // Get the key and value
-    std::regex r(" *= *");
-    auto tmpStr = std::regex_replace(connInfo, r, "=");
-
-    auto keyValues = utils::splitString(tmpStr, " ");
-    for (auto const &kvs : keyValues)
+    auto connParams = parseConnString(connInfo);
+    for (auto const &kv : connParams)
     {
-        auto kv = utils::splitString(kvs, "=");
-        assert(kv.size() == 2);
-        auto key = kv[0];
-        auto value = kv[1];
-        if (value[0] == '\'' && value[value.length() - 1] == '\'')
-        {
-            value = value.substr(1, value.length() - 2);
-        }
+        auto key = kv.first;
+        auto value = kv.second;
+
         std::transform(key.begin(), key.end(), key.begin(), tolower);
         // LOG_TRACE << key << "=" << value;
         if (key == "host")
@@ -93,6 +86,10 @@ MysqlConnection::MysqlConnection(trantor::EventLoop *loop,
         else if (key == "password")
         {
             passwd_ = value;
+        }
+        else if (key == "client_encoding")
+        {
+            characterSet_ = value;
         }
     }
     loop_->queueInLoop([this]() {
@@ -119,11 +116,7 @@ MysqlConnection::MysqlConnection(trantor::EventLoop *loop,
         }
         channelPtr_ =
             std::unique_ptr<trantor::Channel>(new trantor::Channel(loop_, fd));
-        channelPtr_->setCloseCallback([=]() {
-            perror("sock close");
-            handleClosed();
-        });
-        channelPtr_->setEventCallback([=]() { handleEvent(); });
+        channelPtr_->setEventCallback([this]() { handleEvent(); });
         setChannel();
     });
 }
@@ -181,7 +174,6 @@ void MysqlConnection::disconnect()
 }
 void MysqlConnection::handleTimeout()
 {
-    LOG_TRACE << "channel index:" << channelPtr_->index();
     int status = 0;
     status |= MYSQL_WAIT_TIMEOUT;
     MYSQL *ret;
@@ -200,14 +192,26 @@ void MysqlConnection::handleTimeout()
                 return;
             }
             // I don't think the programe can run to here.
-            status_ = ConnectStatus::Ok;
-            if (okCallback_)
+            if (characterSet_.empty())
             {
-                auto thisPtr = shared_from_this();
-                okCallback_(thisPtr);
+                status_ = ConnectStatus::Ok;
+                if (okCallback_)
+                {
+                    auto thisPtr = shared_from_this();
+                    okCallback_(thisPtr);
+                }
+            }
+            else
+            {
+                startSetCharacterSet();
+                return;
             }
         }
         setChannel();
+    }
+    else if (status_ == ConnectStatus::SettingCharacterSet)
+    {
+        continueSetCharacterSet(status);
     }
     else if (status_ == ConnectStatus::Ok)
     {
@@ -224,8 +228,6 @@ void MysqlConnection::handleEvent()
     if (revents & POLLPRI)
         status |= MYSQL_WAIT_EXCEPT;
     status = (status & waitStatus_);
-    if (status == 0 && waitStatus_ != 0)
-        return;
     MYSQL *ret;
     if (status_ == ConnectStatus::Connecting)
     {
@@ -241,11 +243,19 @@ void MysqlConnection::handleEvent()
                 handleClosed();
                 return;
             }
-            status_ = ConnectStatus::Ok;
-            if (okCallback_)
+            if (characterSet_.empty())
             {
-                auto thisPtr = shared_from_this();
-                okCallback_(thisPtr);
+                status_ = ConnectStatus::Ok;
+                if (okCallback_)
+                {
+                    auto thisPtr = shared_from_this();
+                    okCallback_(thisPtr);
+                }
+            }
+            else
+            {
+                startSetCharacterSet();
+                return;
             }
         }
         setChannel();
@@ -320,8 +330,63 @@ void MysqlConnection::handleEvent()
                 return;
         }
     }
+    else if (status_ == ConnectStatus::SettingCharacterSet)
+    {
+        continueSetCharacterSet(status);
+    }
 }
-
+void MysqlConnection::continueSetCharacterSet(int status)
+{
+    int err;
+    waitStatus_ = mysql_set_character_set_cont(&err, mysqlPtr_.get(), status);
+    if (waitStatus_ == 0)
+    {
+        if (err)
+        {
+            LOG_ERROR << "Error(" << err << ") \""
+                      << mysql_error(mysqlPtr_.get()) << "\"";
+            LOG_ERROR << "Failed to mysql_set_character_set_cont()";
+            handleClosed();
+            return;
+        }
+        status_ = ConnectStatus::Ok;
+        if (okCallback_)
+        {
+            auto thisPtr = shared_from_this();
+            okCallback_(thisPtr);
+        }
+    }
+    setChannel();
+}
+void MysqlConnection::startSetCharacterSet()
+{
+    int err;
+    waitStatus_ = mysql_set_character_set_start(&err,
+                                                mysqlPtr_.get(),
+                                                characterSet_.data());
+    if (waitStatus_ == 0)
+    {
+        if (err)
+        {
+            LOG_ERROR << "Error(" << err << ") \""
+                      << mysql_error(mysqlPtr_.get()) << "\"";
+            LOG_ERROR << "Failed to mysql_set_character_set_start()";
+            handleClosed();
+            return;
+        }
+        status_ = ConnectStatus::Ok;
+        if (okCallback_)
+        {
+            auto thisPtr = shared_from_this();
+            okCallback_(thisPtr);
+        }
+    }
+    else
+    {
+        status_ = ConnectStatus::SettingCharacterSet;
+    }
+    setChannel();
+}
 void MysqlConnection::execSqlInLoop(
     string_view &&sql,
     size_t paraNum,
@@ -352,34 +417,36 @@ void MysqlConnection::execSqlInLoop(
             seekPos = sql.find("?", pos);
             if (seekPos == std::string::npos)
             {
-                sql_.append(sql.substr(pos));
+                auto sub = sql.substr(pos);
+                sql_.append(sub.data(), sub.length());
                 pos = seekPos;
                 break;
             }
             else
             {
-                sql_.append(sql.substr(pos, seekPos - pos));
+                auto sub = sql.substr(pos, seekPos - pos);
+                sql_.append(sub.data(), sub.length());
                 pos = seekPos + 1;
                 switch (format[i])
                 {
-                    case MYSQL_TYPE_TINY:
+                    case internal::MySqlTiny:
                         sql_.append(std::to_string(*((char *)parameters[i])));
                         break;
-                    case MYSQL_TYPE_SHORT:
+                    case internal::MySqlShort:
                         sql_.append(std::to_string(*((short *)parameters[i])));
                         break;
-                    case MYSQL_TYPE_LONG:
+                    case internal::MySqlLong:
                         sql_.append(
                             std::to_string(*((int32_t *)parameters[i])));
                         break;
-                    case MYSQL_TYPE_LONGLONG:
+                    case internal::MySqlLongLong:
                         sql_.append(
                             std::to_string(*((int64_t *)parameters[i])));
                         break;
-                    case MYSQL_TYPE_NULL:
+                    case internal::MySqlNull:
                         sql_.append("NULL");
                         break;
-                    case MYSQL_TYPE_STRING:
+                    case internal::MySqlString:
                     {
                         sql_.append("'");
                         std::string to(length[i] * 2, '\0');
@@ -392,6 +459,9 @@ void MysqlConnection::execSqlInLoop(
                         sql_.append("'");
                     }
                     break;
+                    case internal::DrogonDefaultValue:
+                        sql_.append("default");
+                        break;
                     default:
                         break;
                 }
@@ -399,12 +469,13 @@ void MysqlConnection::execSqlInLoop(
         }
         if (pos < sql.length())
         {
-            sql_.append(sql.substr(pos));
+            auto sub = sql.substr(pos);
+            sql_.append(sub.data(), sub.length());
         }
     }
     else
     {
-        sql_ = sql;
+        sql_ = std::string(sql.data(), sql.length());
     }
     LOG_TRACE << sql_;
     int err;
@@ -471,9 +542,12 @@ void MysqlConnection::outputError()
 
         callback_ = nullptr;
         isWorking_ = false;
-        idleCb_();
+        if (errorNo != CR_SERVER_GONE_ERROR && errorNo != CR_SERVER_LOST)
+        {
+            idleCb_();
+        }
     }
-    if (errorNo == CR_SERVER_GONE_ERROR)
+    if (errorNo == CR_SERVER_GONE_ERROR || errorNo == CR_SERVER_LOST)
     {
         handleClosed();
     }

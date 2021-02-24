@@ -56,6 +56,7 @@ enum HttpStatusCode
     k415UnsupportedMediaType = 415,
     k416RequestedRangeNotSatisfiable = 416,
     k417ExpectationFailed = 417,
+    k418ImATeapot = 418,
     k421MisdirectedRequest = 421,
     k425TooEarly = 425,
     k426UpgradeRequired = 426,
@@ -101,6 +102,8 @@ enum ContentType
     CT_APPLICATION_PDF,
     CT_IMAGE_SVG_XML,
     CT_IMAGE_PNG,
+    CT_IMAGE_WEBP,
+    CT_IMAGE_AVIF,
     CT_IMAGE_JPG,
     CT_IMAGE_GIF,
     CT_IMAGE_XICON,
@@ -118,6 +121,7 @@ enum HttpMethod
     Put,
     Delete,
     Options,
+    Patch,
     Invalid
 };
 
@@ -127,7 +131,9 @@ enum class ReqResult
     BadResponse,
     NetworkFailure,
     BadServerAddress,
-    Timeout
+    Timeout,
+    HandshakeError,
+    InvalidCertificate,
 };
 
 enum class WebSocketMessageType

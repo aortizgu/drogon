@@ -1,7 +1,7 @@
 /**
  *
- *  HttpAppFrameworkImpl.h
- *  An Tao
+ *  @file HttpAppFrameworkImpl.h
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -17,6 +17,7 @@
 #include "impl_forwards.h"
 #include <drogon/HttpAppFramework.h>
 #include <drogon/config.h>
+#include <json/json.h>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -48,12 +49,12 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     }
 
     virtual PluginBase *getPlugin(const std::string &name) override;
-    virtual HttpAppFramework &addListener(
-        const std::string &ip,
-        uint16_t port,
-        bool useSSL = false,
-        const std::string &certFile = "",
-        const std::string &keyFile = "") override;
+    virtual HttpAppFramework &addListener(const std::string &ip,
+                                          uint16_t port,
+                                          bool useSSL = false,
+                                          const std::string &certFile = "",
+                                          const std::string &keyFile = "",
+                                          bool useOldTLS = false) override;
     virtual HttpAppFramework &setThreadNum(size_t threadNum) override;
     virtual size_t getThreadNum() const override
     {
@@ -93,11 +94,13 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     virtual void forward(
         const HttpRequestPtr &req,
         std::function<void(const HttpResponsePtr &)> &&callback,
-        const std::string &hostString = "") override;
+        const std::string &hostString = "",
+        double timeout = 0) override;
 
     void forward(const HttpRequestImplPtr &req,
                  std::function<void(const HttpResponsePtr &)> &&callback,
-                 const std::string &hostString);
+                 const std::string &hostString,
+                 double timeout = 0);
 
     virtual HttpAppFramework &registerBeginningAdvice(
         const std::function<void()> &advice) override
@@ -114,6 +117,20 @@ class HttpAppFrameworkImpl : public HttpAppFramework
         newConnectionAdvices_.emplace_back(advice);
         return *this;
     }
+
+    virtual HttpAppFramework &registerHttpResponseCreationAdvice(
+        const std::function<void(const HttpResponsePtr &)> &advice) override
+    {
+        responseCreationAdvices_.emplace_back(advice);
+        return *this;
+    }
+
+    const std::vector<std::function<void(const HttpResponsePtr &)>>
+        &getResponseCreationAdvices() const
+    {
+        return responseCreationAdvices_;
+    }
+
     virtual HttpAppFramework &registerSyncAdvice(
         const std::function<HttpResponsePtr(const HttpRequestPtr &)> &advice)
         override
@@ -232,6 +249,8 @@ class HttpAppFrameworkImpl : public HttpAppFramework
         size_t maxConnectionsPerIP) override;
     virtual HttpAppFramework &loadConfigFile(
         const std::string &fileName) override;
+    virtual HttpAppFramework &loadConfigJson(const Json::Value &data) override;
+    virtual HttpAppFramework &loadConfigJson(Json::Value &&data) override;
     virtual HttpAppFramework &enableRunAsDaemon() override
     {
         runAsDaemon_ = true;
@@ -319,6 +338,22 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     {
         return homePageFile_;
     }
+    virtual HttpAppFramework &setTermSignalHandler(
+        const std::function<void()> &handler) override
+    {
+        termSignalHandler_ = handler;
+        return *this;
+    }
+    const std::function<void()> &getTermSignalHandler() const
+    {
+        return termSignalHandler_;
+    }
+    virtual HttpAppFramework &setImplicitPageEnable(
+        bool useImplicitPage) override;
+    bool isImplicitPageEnabled() const override;
+    virtual HttpAppFramework &setImplicitPage(
+        const std::string &implicitPageFile) override;
+    const std::string &getImplicitPage() const override;
     size_t getClientMaxBodySize() const
     {
         return clientMaxBodySize_;
@@ -349,6 +384,30 @@ class HttpAppFrameworkImpl : public HttpAppFramework
         return running_;
     }
 
+    virtual HttpAppFramework &setUnicodeEscapingInJson(
+        bool enable) noexcept override
+    {
+        usingUnicodeEscaping_ = enable;
+        return *this;
+    }
+
+    virtual bool isUnicodeEscapingUsedInJson() const noexcept override
+    {
+        return usingUnicodeEscaping_;
+    }
+    virtual HttpAppFramework &setFloatPrecisionInJson(
+        unsigned int precision,
+        const std::string &precisionType = "significant") noexcept override
+    {
+        floatPrecisionInJson_ = std::make_pair(precision, precisionType);
+        return *this;
+    }
+
+    virtual const std::pair<unsigned int, std::string>
+        &getFloatPrecisionInJson() const noexcept override
+    {
+        return floatPrecisionInJson_;
+    }
     virtual trantor::EventLoop *getLoop() const override;
 
     virtual trantor::EventLoop *getIOLoop(size_t id) const override;
@@ -360,7 +419,7 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     {
         assert(!running_);
         assert(server.find("\r\n") == std::string::npos);
-        serverHeader_ = "Server: " + server + "\r\n";
+        serverHeader_ = "server: " + server + "\r\n";
         return *this;
     }
 
@@ -401,8 +460,9 @@ class HttpAppFrameworkImpl : public HttpAppFramework
         const size_t connectionNum = 1,
         const std::string &filename = "",
         const std::string &name = "default",
-        const bool isFast = false) override;
-
+        const bool isFast = false,
+        const std::string &characterSet = "") override;
+    virtual std::vector<trantor::InetAddress> getListeners() const override;
     inline static HttpAppFrameworkImpl &instance()
     {
         static HttpAppFrameworkImpl instance;
@@ -442,6 +502,18 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     virtual bool areAllDbClientsAvailable() const noexcept override;
     const std::function<HttpResponsePtr(HttpStatusCode)>
         &getCustomErrorHandler() const override;
+    bool isUsingCustomErrorHandler() const
+    {
+        return usingCustomErrorHandler_;
+    }
+    virtual void enableReusePort(bool enable = true) override
+    {
+        reusePort_ = enable;
+    }
+    virtual bool reusePort() const override
+    {
+        return reusePort_;
+    }
 
   private:
     virtual void registerHttpController(
@@ -469,13 +541,15 @@ class HttpAppFrameworkImpl : public HttpAppFramework
                      const std::vector<HttpMethod> &validMethods,
                      const std::vector<std::string> &filters);
 
+    void findSessionForRequest(const HttpRequestImplPtr &req);
+
     // We use a uuid string as session id;
     // set sessionTimeout_=0 to make location session valid forever based on
     // cookies;
     size_t sessionTimeout_{0};
     size_t idleConnectionTimeout_{60};
     bool useSession_{false};
-    std::string serverHeader_{"Server: drogon/" + drogon::getVersion() +
+    std::string serverHeader_{"server: drogon/" + drogon::getVersion() +
                               "\r\n"};
 
     const std::unique_ptr<StaticFileRouter> staticFileRouterPtr_;
@@ -518,10 +592,15 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     bool useSendfile_{true};
     bool useGzip_{true};
     bool useBrotli_{false};
+    bool usingUnicodeEscaping_{true};
+    std::pair<unsigned int, std::string> floatPrecisionInJson_{0,
+                                                               "significant"};
+    bool usingCustomErrorHandler_{false};
     size_t clientMaxBodySize_{1024 * 1024};
     size_t clientMaxMemoryBodySize_{64 * 1024};
     size_t clientMaxWebSocketMessageSize_{128 * 1024};
     std::string homePageFile_{"index.html"};
+    std::function<void()> termSignalHandler_{[]() { app().quit(); }};
     std::unique_ptr<SessionManager> sessionManagerPtr_;
     Json::Value jsonConfig_;
     HttpResponsePtr custom404_;
@@ -530,10 +609,13 @@ class HttpAppFrameworkImpl : public HttpAppFramework
     static InitBeforeMainFunction initFirst_;
     bool enableServerHeader_{true};
     bool enableDateHeader_{true};
+    bool reusePort_{false};
     std::vector<std::function<void()>> beginningAdvices_;
     std::vector<std::function<bool(const trantor::InetAddress &,
                                    const trantor::InetAddress &)>>
         newConnectionAdvices_;
+    std::vector<std::function<void(const HttpResponsePtr &)>>
+        responseCreationAdvices_;
     std::vector<std::function<HttpResponsePtr(const HttpRequestPtr &)>>
         syncAdvices_;
     std::vector<std::function<void(const HttpRequestPtr &,

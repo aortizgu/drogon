@@ -1,6 +1,6 @@
 /**
  *
- *  HttpRequestImpl.h
+ *  @file HttpRequestImpl.h
  *  An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
@@ -46,7 +46,6 @@ class HttpRequestImpl : public HttpRequest
     {
         method_ = Invalid;
         version_ = Version::kUnknown;
-        contentLen_ = 0;
         flagForParsingJson_ = false;
         headers_.clear();
         cookies_.clear();
@@ -59,12 +58,13 @@ class HttpRequestImpl : public HttpRequest
         sessionPtr_.reset();
         attributesPtr_.reset();
         cacheFilePtr_.reset();
-        expect_.clear();
+        expectPtr_.reset();
         content_.clear();
         contentType_ = CT_TEXT_PLAIN;
         flagForParsingContentType_ = false;
         contentTypeString_.clear();
         keepAlive_ = true;
+        jsonParsingErrorPtr_.reset();
     }
     trantor::EventLoop *getLoop()
     {
@@ -179,19 +179,9 @@ class HttpRequestImpl : public HttpRequest
         return content_.length();
     }
 
-    void appendToBody(const char *data, size_t length)
-    {
-        if (cacheFilePtr_)
-        {
-            cacheFilePtr_->append(data, length);
-        }
-        else
-        {
-            content_.append(data, length);
-        }
-    }
+    void appendToBody(const char *data, size_t length);
 
-    void reserveBodySize();
+    void reserveBodySize(size_t length);
 
     string_view queryView() const
     {
@@ -242,17 +232,18 @@ class HttpRequestImpl : public HttpRequest
 
     void addHeader(const char *start, const char *colon, const char *end);
 
-    const std::string &getHeader(const std::string &field) const override
+    virtual void removeHeader(std::string key) override
     {
-        auto lowField = field;
-        std::transform(lowField.begin(),
-                       lowField.end(),
-                       lowField.begin(),
-                       tolower);
-        return getHeaderBy(lowField);
+        transform(key.begin(), key.end(), key.begin(), ::tolower);
+        removeHeaderBy(key);
     }
 
-    const std::string &getHeader(std::string &&field) const override
+    void removeHeaderBy(const std::string &lowerKey)
+    {
+        headers_.erase(lowerKey);
+    }
+
+    const std::string &getHeader(std::string field) const override
     {
         std::transform(field.begin(), field.end(), field.begin(), tolower);
         return getHeaderBy(field);
@@ -319,10 +310,16 @@ class HttpRequestImpl : public HttpRequest
         content_ = std::move(body);
     }
 
-    virtual void addHeader(const std::string &key,
-                           const std::string &value) override
+    virtual void addHeader(std::string field, const std::string &value) override
     {
-        headers_[key] = value;
+        transform(field.begin(), field.end(), field.begin(), ::tolower);
+        headers_[std::move(field)] = value;
+    }
+
+    virtual void addHeader(std::string field, std::string &&value) override
+    {
+        transform(field.begin(), field.end(), field.begin(), ::tolower);
+        headers_[std::move(field)] = std::move(value);
     }
 
     virtual void addCookie(const std::string &key,
@@ -343,7 +340,7 @@ class HttpRequestImpl : public HttpRequest
 
     void appendToBuffer(trantor::MsgBuffer *output) const;
 
-    virtual SessionPtr session() const override
+    virtual const SessionPtr &session() const override
     {
         return sessionPtr_;
     }
@@ -362,7 +359,7 @@ class HttpRequestImpl : public HttpRequest
         return attributesPtr_;
     }
 
-    virtual const std::shared_ptr<Json::Value> jsonObject() const override
+    virtual const std::shared_ptr<Json::Value> &jsonObject() const override
     {
         // Not multi-thread safe but good, because we basically call this
         // function in a single thread
@@ -438,7 +435,10 @@ class HttpRequestImpl : public HttpRequest
     }
     const std::string &expect() const
     {
-        return expect_;
+        const static std::string none{""};
+        if (expectPtr_)
+            return *expectPtr_;
+        return none;
     }
     bool keepAlive() const
     {
@@ -447,6 +447,13 @@ class HttpRequestImpl : public HttpRequest
     virtual bool isOnSecureConnection() const noexcept override
     {
         return isOnSecureConnection_;
+    }
+    virtual const std::string &getJsonError() const override
+    {
+        const static std::string none{""};
+        if (jsonParsingErrorPtr_)
+            return *jsonParsingErrorPtr_;
+        return none;
     }
 
     ~HttpRequestImpl();
@@ -474,7 +481,7 @@ class HttpRequestImpl : public HttpRequest
             parseParameters();
         }
     }
-
+    void createTmpFile();
     void parseJson() const;
     mutable bool flagForParsingParameters_{false};
     mutable bool flagForParsingJson_{false};
@@ -493,14 +500,14 @@ class HttpRequestImpl : public HttpRequest
     trantor::InetAddress local_;
     trantor::Date creationDate_;
     std::unique_ptr<CacheFile> cacheFilePtr_;
-    std::string expect_;
+    mutable std::unique_ptr<std::string> jsonParsingErrorPtr_;
+    std::unique_ptr<std::string> expectPtr_;
     bool keepAlive_{true};
     bool isOnSecureConnection_{false};
     bool passThrough_{false};
 
   protected:
     std::string content_;
-    size_t contentLen_{0};
     trantor::EventLoop *loop_;
     mutable ContentType contentType_{CT_TEXT_PLAIN};
     mutable bool flagForParsingContentType_{false};

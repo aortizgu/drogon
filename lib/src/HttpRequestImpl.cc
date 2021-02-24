@@ -1,7 +1,7 @@
 /**
  *
- *  HttpRequestImpl.cc
- *  An Tao
+ *  @file HttpRequestImpl.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -46,11 +46,19 @@ void HttpRequestImpl::parseJson() const
         {
             LOG_ERROR << errs;
             jsonPtr_.reset();
+            jsonParsingErrorPtr_ =
+                std::make_unique<std::string>(std::move(errs));
+        }
+        else
+        {
+            jsonParsingErrorPtr_.reset();
         }
     }
     else
     {
         jsonPtr_.reset();
+        jsonParsingErrorPtr_ =
+            std::make_unique<std::string>("content type error");
     }
 }
 void HttpRequestImpl::parseParameters() const
@@ -177,6 +185,9 @@ void HttpRequestImpl::appendToBuffer(trantor::MsgBuffer *output) const
         case Options:
             output->append("OPTIONS ");
             break;
+        case Patch:
+            output->append("PATCH ");
+            break;
         default:
             return;
     }
@@ -261,7 +272,7 @@ void HttpRequestImpl::appendToBuffer(trantor::MsgBuffer *output) const
                 content.append("--");
                 content.append(mReq->boundary());
                 content.append("\r\n");
-                content.append("Content-Disposition: form-data; name=\"");
+                content.append("content-disposition: form-data; name=\"");
                 content.append(param.first);
                 content.append("\"\r\n\r\n");
                 content.append(param.second);
@@ -272,7 +283,7 @@ void HttpRequestImpl::appendToBuffer(trantor::MsgBuffer *output) const
                 content.append("--");
                 content.append(mReq->boundary());
                 content.append("\r\n");
-                content.append("Content-Disposition: form-data; name=\"");
+                content.append("content-disposition: form-data; name=\"");
                 content.append(file.itemName());
                 content.append("\"; filename=\"");
                 content.append(file.fileName());
@@ -303,11 +314,11 @@ void HttpRequestImpl::appendToBuffer(trantor::MsgBuffer *output) const
     if (!passThrough_ && (!content.empty() || !content_.empty()))
     {
         char buf[64];
-        auto len = snprintf(buf,
-                            sizeof(buf),
-                            "Content-Length: %lu\r\n",
-                            static_cast<long unsigned int>(content.length() +
-                                                           content_.length()));
+        auto len =
+            snprintf(buf,
+                     sizeof(buf),
+                     contentLengthFormatString<decltype(content.length())>(),
+                     content.length() + content_.length());
         output->append(buf, len);
         if (contentTypeString_.empty())
         {
@@ -328,7 +339,7 @@ void HttpRequestImpl::appendToBuffer(trantor::MsgBuffer *output) const
     }
     if (cookies_.size() > 0)
     {
-        output->append("Cookie: ");
+        output->append("cookie: ");
         for (auto it = cookies_.begin(); it != cookies_.end(); ++it)
         {
             output->append(it->first);
@@ -409,7 +420,7 @@ void HttpRequestImpl::addHeader(const char *start,
             case 6:
                 if (field == "expect")
                 {
-                    expect_ = value;
+                    expectPtr_ = std::make_unique<std::string>(value);
                 }
                 break;
             case 10:
@@ -429,12 +440,7 @@ void HttpRequestImpl::addHeader(const char *start,
                 }
             }
             break;
-            case 14:
-                if (field == "content-length")
-                {
-                    contentLen_ = std::stoull(value.c_str());
-                }
-                break;
+
             default:
                 break;
         }
@@ -467,6 +473,16 @@ HttpRequestPtr HttpRequest::newHttpJsonRequest(const Json::Value &data)
     std::call_once(once, []() {
         builder["commentStyle"] = "None";
         builder["indentation"] = "";
+        if (!app().isUnicodeEscapingUsedInJson())
+        {
+            builder["emitUTF8"] = true;
+        }
+        auto &precision = app().getFloatPrecisionInJson();
+        if (precision.first != 0)
+        {
+            builder["precision"] = precision.first;
+            builder["precisionType"] = precision.second;
+        }
     });
     auto req = std::make_shared<HttpRequestImpl>(nullptr);
     req->setMethod(drogon::Get);
@@ -504,13 +520,13 @@ void HttpRequestImpl::swap(HttpRequestImpl &that) noexcept
     swap(local_, that.local_);
     swap(creationDate_, that.creationDate_);
     swap(content_, that.content_);
-    swap(contentLen_, that.contentLen_);
-    swap(expect_, that.expect_);
+    swap(expectPtr_, that.expectPtr_);
     swap(contentType_, that.contentType_);
     swap(contentTypeString_, that.contentTypeString_);
     swap(keepAlive_, that.keepAlive_);
     swap(loop_, that.loop_);
     swap(flagForParsingContentType_, that.flagForParsingContentType_);
+    swap(jsonParsingErrorPtr_, that.jsonParsingErrorPtr_);
 }
 
 const char *HttpRequestImpl::methodString() const
@@ -535,6 +551,9 @@ const char *HttpRequestImpl::methodString() const
             break;
         case Options:
             result = "OPTIONS";
+            break;
+        case Patch:
+            result = "PATCH";
             break;
         default:
             break;
@@ -570,6 +589,16 @@ bool HttpRequestImpl::setMethod(const char *start, const char *end)
             else if (m == "HEAD")
             {
                 method_ = Head;
+            }
+            else
+            {
+                method_ = Invalid;
+            }
+            break;
+        case 5:
+            if (m == "PATCH")
+            {
+                method_ = Patch;
             }
             else
             {
@@ -616,23 +645,50 @@ HttpRequestImpl::~HttpRequestImpl()
 {
 }
 
-void HttpRequestImpl::reserveBodySize()
+void HttpRequestImpl::reserveBodySize(size_t length)
 {
-    if (contentLen_ <=
-        HttpAppFrameworkImpl::instance().getClientMaxMemoryBodySize())
+    if (length <= HttpAppFrameworkImpl::instance().getClientMaxMemoryBodySize())
     {
-        content_.reserve(contentLen_);
+        content_.reserve(length);
     }
     else
     {
         // Store data of body to a temperary file
-        auto tmpfile = HttpAppFrameworkImpl::instance().getUploadPath();
-        auto fileName = utils::getUuid();
-        tmpfile.append("/tmp/")
-            .append(1, fileName[0])
-            .append(1, fileName[1])
-            .append("/")
-            .append(fileName);
-        cacheFilePtr_ = std::make_unique<CacheFile>(tmpfile);
+        createTmpFile();
     }
+}
+
+void HttpRequestImpl::appendToBody(const char *data, size_t length)
+{
+    if (cacheFilePtr_)
+    {
+        cacheFilePtr_->append(data, length);
+    }
+    else
+    {
+        if (content_.length() + length <=
+            HttpAppFrameworkImpl::instance().getClientMaxMemoryBodySize())
+        {
+            content_.append(data, length);
+        }
+        else
+        {
+            createTmpFile();
+            cacheFilePtr_->append(content_);
+            cacheFilePtr_->append(data, length);
+            content_.clear();
+        }
+    }
+}
+
+void HttpRequestImpl::createTmpFile()
+{
+    auto tmpfile = HttpAppFrameworkImpl::instance().getUploadPath();
+    auto fileName = utils::getUuid();
+    tmpfile.append("/tmp/")
+        .append(1, fileName[0])
+        .append(1, fileName[1])
+        .append("/")
+        .append(fileName);
+    cacheFilePtr_ = std::make_unique<CacheFile>(tmpfile);
 }

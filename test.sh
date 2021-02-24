@@ -65,6 +65,16 @@ if [ $? -ne 0 ]; then
     exit -1
 fi
 
+# Test websocket client coroutine
+if [ -f ./websocket_coro_test ]; then
+    echo "Test WebSocket w/ coroutine"
+    ./websocket_coro_test -t
+    if [ $? -ne 0 ]; then
+        echo "Error in testing WebSocket with coroutine"
+        exit -1
+    fi
+fi
+
 #Test pipelining
 echo "Test the pipelining"
 ./pipelining_test
@@ -117,6 +127,10 @@ if [ ! -f "Test_TestPlugin.h" -o ! -f "Test_TestPlugin.cc" ]; then
     echo "Failed to create plugins"
     exit -1
 fi
+
+cd ../views
+
+echo "Hello, world!" >> hello.csp
 
 cd ../build
 cmake .. $cmake_gen

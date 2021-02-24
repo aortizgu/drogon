@@ -1,5 +1,5 @@
 /**
- *  HttpResponse.h
+ *  @file HttpResponse.h
  *  An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
@@ -166,14 +166,14 @@ class HttpResponse
      * If there is no the header, a empty string is retured.
      * The key is case insensitive
      */
-    virtual const std::string &getHeader(const std::string &key) const = 0;
-    virtual const std::string &getHeader(std::string &&key) const = 0;
+    virtual const std::string &getHeader(std::string key) const = 0;
 
-    /// Remove the header identified by the key parameter.
-    virtual void removeHeader(const std::string &key) = 0;
-
-    /// Remove the header identified by the key parameter.
-    virtual void removeHeader(std::string &&key) = 0;
+    /**
+     * @brief  Remove the header identified by the key parameter.
+     *
+     * @param key The key is case insensitive
+     */
+    virtual void removeHeader(std::string key) = 0;
 
     /// Get all headers of the response
     virtual const std::unordered_map<std::string, std::string> &headers()
@@ -185,12 +185,15 @@ class HttpResponse
         return headers();
     }
 
-    /// Add a header.
-    virtual void addHeader(const std::string &key,
-                           const std::string &value) = 0;
-
-    /// Add a header.
-    virtual void addHeader(const std::string &key, std::string &&value) = 0;
+    /**
+     * @brief Set the header string identified by the field parameter
+     *
+     * @param field The field parameter is transformed to lower case before
+     * storing.
+     * @param value The value of the header.
+     */
+    virtual void addHeader(std::string field, const std::string &value) = 0;
+    virtual void addHeader(std::string field, std::string &&value) = 0;
 
     /// Add a cookie
     virtual void addCookie(const std::string &key,
@@ -234,19 +237,13 @@ class HttpResponse
     }
 
     /// Get the response body.
-    virtual const std::string &body() const = 0;
-
-    /// Get the response body.
-    const std::string &getBody() const
+    string_view body() const
     {
-        return body();
+        return string_view{getBodyData(), getBodyLength()};
     }
 
     /// Get the response body.
-    virtual std::string &body() = 0;
-
-    /// Get the response body.
-    std::string &getBody()
+    string_view getBody() const
     {
         return body();
     }
@@ -282,11 +279,21 @@ class HttpResponse
     /// Get the json object from the server response.
     /// If the response is not in json format, then a empty shared_ptr is
     /// retured.
-    virtual const std::shared_ptr<Json::Value> jsonObject() const = 0;
-    const std::shared_ptr<Json::Value> getJsonObject() const
+    virtual const std::shared_ptr<Json::Value> &jsonObject() const = 0;
+    const std::shared_ptr<Json::Value> &getJsonObject() const
     {
         return jsonObject();
     }
+
+    /**
+     * @brief Get the error message of parsing the JSON body received from peer.
+     * This method usually is called after getting a empty shared_ptr object
+     * by the getJsonObject() method.
+     *
+     * @return const std::string& The error message. An empty string is returned
+     * when no error occurs.
+     */
+    virtual const std::string &getJsonError() const = 0;
 
     /**
      * @brief Set the reponse object to the pass-through mode or not. It's not
@@ -362,6 +369,8 @@ class HttpResponse
 
   private:
     virtual void setBody(const char *body, size_t len) = 0;
+    virtual const char *getBodyData() const = 0;
+    virtual size_t getBodyLength() const = 0;
     virtual void setContentTypeCodeAndCustomString(ContentType type,
                                                    const char *typeString,
                                                    size_t typeStringLength) = 0;

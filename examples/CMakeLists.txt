@@ -1,21 +1,5 @@
 link_libraries(${PROJECT_NAME})
 
-file(GLOB SCP_LIST ${CMAKE_CURRENT_SOURCE_DIR}/simple_example/*.csp)
-foreach(cspFile ${SCP_LIST})
-  message(STATUS "cspFile:" ${cspFile})
-  get_filename_component(classname ${cspFile} NAME_WE)
-  message(STATUS "view classname:" ${classname})
-  add_custom_command(OUTPUT ${classname}.h ${classname}.cc
-                     COMMAND drogon_ctl
-                             ARGS
-                             create
-                             view
-                             ${cspFile}
-                     DEPENDS ${cspFile}
-                     VERBATIM)
-  set(VIEWSRC ${VIEWSRC} ${classname}.cc)
-endforeach()
-
 set(simple_example_sources
     simple_example/CustomCtrl.cc
     simple_example/CustomHeaderFilter.cc
@@ -34,7 +18,16 @@ set(simple_example_sources
     simple_example/DigestAuthFilter.cc
     simple_example/main.cc)
 
-add_executable(webapp ${simple_example_sources} ${VIEWSRC})
+if(DROGON_CXX_STANDARD GREATER_EQUAL 20)
+    set(simple_example_sources ${simple_example_sources}
+        simple_example/api_v1_CoroTest.cc)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+endif(DROGON_CXX_STANDARD GREATER_EQUAL 20)
+
+add_executable(webapp ${simple_example_sources})
+drogon_create_views(webapp ${CMAKE_CURRENT_SOURCE_DIR}/simple_example
+                    ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(webapp drogon_ctl)
 
 set(client_example_sources client_example/main.cc)
@@ -60,7 +53,13 @@ add_custom_command(
           ${CMAKE_CURRENT_SOURCE_DIR}/simple_example/index.html.gz
           ${PROJECT_SOURCE_DIR}/trantor/trantor/tests/server.pem
           $<TARGET_FILE_DIR:webapp>)
-
+add_custom_command(
+  TARGET webapp POST_BUILD
+  COMMAND ${CMAKE_COMMAND}
+          -E
+          copy_directory
+          ${CMAKE_CURRENT_SOURCE_DIR}/simple_example/a-directory
+          $<TARGET_FILE_DIR:webapp>/a-directory)
 set(example_targets
     webapp
     webapp_test
@@ -69,6 +68,10 @@ set(example_targets
     pipelining_test
     websocket_test
     multiple_ws_test)
+if(DROGON_CXX_STANDARD GREATER_EQUAL 20)
+    add_executable(websocket_coro_test simple_example_test/WebSocketCoroTest.cc)
+    set(simple_example ${simple_example} websocket_coro_test)
+endif(DROGON_CXX_STANDARD GREATER_EQUAL 20)
 
 set_property(TARGET ${example_targets}
              PROPERTY CXX_STANDARD ${DROGON_CXX_STANDARD})

@@ -1,6 +1,6 @@
 /**
  *
- *  SessionManager.cc
+ *  @file SessionManager.cc
  *  An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
@@ -13,6 +13,7 @@
  */
 
 #include "SessionManager.h"
+#include <drogon/utils/Utilities.h>
 
 using namespace drogon;
 
@@ -54,12 +55,34 @@ SessionPtr SessionManager::getSession(const std::string &sessionID,
 {
     assert(!sessionID.empty());
     SessionPtr sessionPtr;
-    std::lock_guard<std::mutex> lock(mapMutex_);
-    if (sessionMapPtr_->findAndFetch(sessionID, sessionPtr) == false)
-    {
-        sessionPtr = std::make_shared<Session>(sessionID, needToSet);
-        sessionMapPtr_->insert(sessionID, sessionPtr, timeout_);
-        return sessionPtr;
-    }
+    sessionMapPtr_->modify(
+        sessionID,
+        [&sessionPtr, &sessionID, needToSet](SessionPtr &sessionInCache) {
+            if (sessionInCache)
+            {
+                sessionPtr = sessionInCache;
+            }
+            else
+            {
+                sessionPtr =
+                    std::shared_ptr<Session>(new Session(sessionID, needToSet));
+                sessionInCache = sessionPtr;
+            }
+        },
+        timeout_);
     return sessionPtr;
+}
+
+void SessionManager::changeSessionId(const SessionPtr &sessionPtr)
+{
+    auto oldId = sessionPtr->sessionId();
+    auto newId = utils::getUuid();
+    sessionPtr->setSessionId(newId);
+    sessionMapPtr_->insert(newId, sessionPtr, timeout_);
+    // For requests sent before setting the new session ID to the client, we
+    // reserve the old session slot for a period of time.
+    sessionMapPtr_->runAfter(10, [this, oldId = std::move(oldId)]() {
+        LOG_TRACE << "remove the old slot of the session";
+        sessionMapPtr_->erase(oldId);
+    });
 }

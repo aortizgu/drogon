@@ -1,7 +1,7 @@
 /**
  *
- *  ListenerManager.cc
- *  An Tao
+ *  @file ListenerManager.cc
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -34,7 +34,7 @@ class DrogonFileLocker : public trantor::NonCopyable
   public:
     DrogonFileLocker()
     {
-        fd_ = open("/tmp/drogon.lock", O_TRUNC | O_CREAT, 0755);
+        fd_ = open("/tmp/drogon.lock", O_TRUNC | O_CREAT, 0666);
         flock(fd_, LOCK_EX);
     }
     ~DrogonFileLocker()
@@ -56,7 +56,8 @@ void ListenerManager::addListener(const std::string &ip,
                                   uint16_t port,
                                   bool useSSL,
                                   const std::string &certFile,
-                                  const std::string &keyFile)
+                                  const std::string &keyFile,
+                                  bool useOldTLS)
 {
 #ifndef OpenSSL_FOUND
     if (useSSL)
@@ -64,7 +65,7 @@ void ListenerManager::addListener(const std::string &ip,
         LOG_ERROR << "Can't use SSL without OpenSSL found in your system";
     }
 #endif
-    listeners_.emplace_back(ip, port, useSSL, certFile, keyFile);
+    listeners_.emplace_back(ip, port, useSSL, certFile, keyFile, useOldTLS);
 }
 
 std::vector<trantor::EventLoop *> ListenerManager::createListeners(
@@ -90,7 +91,7 @@ std::vector<trantor::EventLoop *> ListenerManager::createListeners(
             auto const &ip = listener.ip_;
             bool isIpv6 = ip.find(':') == std::string::npos ? false : true;
             std::shared_ptr<HttpServer> serverPtr;
-            if (i == 0)
+            if (i == 0 && !app().reusePort())
             {
                 DrogonFileLocker lock;
                 // Check whether the port is in use.
@@ -130,7 +131,7 @@ std::vector<trantor::EventLoop *> ListenerManager::createListeners(
                         << std::endl;
                     exit(1);
                 }
-                serverPtr->enableSSL(cert, key);
+                serverPtr->enableSSL(cert, key, listener.useOldTLS_);
 #endif
             }
             serverPtr->setHttpAsyncCallback(httpCallback);
@@ -171,7 +172,7 @@ std::vector<trantor::EventLoop *> ListenerManager::createListeners(
                           << std::endl;
                 exit(1);
             }
-            serverPtr->enableSSL(cert, key);
+            serverPtr->enableSSL(cert, key, listener.useOldTLS_);
 #endif
         }
         serverPtr->setIoLoopThreadPool(ioLoopThreadPoolPtr_);
@@ -203,24 +204,22 @@ ListenerManager::~ListenerManager()
 
 trantor::EventLoop *ListenerManager::getIOLoop(size_t id) const
 {
-#ifdef __linux__
-    if (id >= listeningloopThreads_.size())
+    auto const n = listeningloopThreads_.size();
+    if (0 == n)
     {
-        LOG_TRACE << "Loop id (" << id << ") out of range [0-"
-                  << listeningloopThreads_.size() << ").";
-        id %= listeningloopThreads_.size();
+        LOG_WARN << "Please call getIOLoop() after drogon::app().run()";
+        return nullptr;
+    }
+    if (id >= n)
+    {
+        LOG_TRACE << "Loop id (" << id << ") out of range [0-" << n << ").";
+        id %= n;
         LOG_TRACE << "Rounded to : " << id;
     }
+#ifdef __linux__
     assert(listeningloopThreads_[id]);
     return listeningloopThreads_[id]->getLoop();
 #else
-    if (id >= ioLoopThreadPoolPtr_->size())
-    {
-        LOG_TRACE << "Loop id (" << id << ") out of range [0-"
-                  << listeningloopThreads_.size() << ").";
-        id %= ioLoopThreadPoolPtr_->size();
-        LOG_TRACE << "Rounded to : " << id;
-    }
     return ioLoopThreadPoolPtr_->getLoop(id);
 #endif
 }
@@ -261,4 +260,14 @@ void ListenerManager::stopListening()
         }
     }
 #endif
+}
+
+std::vector<trantor::InetAddress> ListenerManager::getListeners() const
+{
+    std::vector<trantor::InetAddress> listeners;
+    for (auto &server : servers_)
+    {
+        listeners.emplace_back(server->address());
+    }
+    return listeners;
 }

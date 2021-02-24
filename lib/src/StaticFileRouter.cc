@@ -23,6 +23,7 @@
 #ifndef _WIN32
 #include <sys/file.h>
 #else
+#define stat _stati64
 #define S_ISREG(m) (((m)&0170000) == (0100000))
 #define S_ISDIR(m) (((m)&0170000) == (0040000))
 #endif
@@ -64,6 +65,7 @@ void StaticFileRouter::route(
         callback(app().getCustomErrorHandler()(k403Forbidden));
         return;
     }
+
     auto lPath = path;
     std::transform(lPath.begin(), lPath.end(), lPath.begin(), tolower);
 
@@ -115,29 +117,52 @@ void StaticFileRouter::route(
                 callback(app().getCustomErrorHandler()(k403Forbidden));
                 return;
             }
-            if (!location.allowAll_)
+            std::string filePath =
+                location.realLocation_ +
+                std::string{restOfThePath.data(), restOfThePath.length()};
+            struct stat fileStat;
+            if (stat(filePath.c_str(), &fileStat) != 0)
             {
-                pos = restOfThePath.rfind('.');
-                if (pos == string_view::npos)
+                callback(HttpResponse::newNotFoundResponse());
+                return;
+            }
+            if (S_ISDIR(fileStat.st_mode))
+            {
+                // Check if path is eligible for an implicit index.html
+                if (implicitPageEnable_)
                 {
-                    callback(app().getCustomErrorHandler()(k403Forbidden));
-                    return;
+                    filePath = filePath + "/" + implicitPage_;
                 }
-                std::string extension{restOfThePath.data() + pos + 1,
-                                      restOfThePath.length() - pos - 1};
-                std::transform(extension.begin(),
-                               extension.end(),
-                               extension.begin(),
-                               tolower);
-                if (fileTypeSet_.find(extension) == fileTypeSet_.end())
+                else
                 {
                     callback(app().getCustomErrorHandler()(k403Forbidden));
                     return;
                 }
             }
-            std::string filePath =
-                location.realLocation_ +
-                std::string{restOfThePath.data(), restOfThePath.length()};
+            else
+            {
+                if (!location.allowAll_)
+                {
+                    pos = restOfThePath.rfind('.');
+                    if (pos == string_view::npos)
+                    {
+                        callback(app().getCustomErrorHandler()(k403Forbidden));
+                        return;
+                    }
+                    std::string extension{restOfThePath.data() + pos + 1,
+                                          restOfThePath.length() - pos - 1};
+                    std::transform(extension.begin(),
+                                   extension.end(),
+                                   extension.begin(),
+                                   tolower);
+                    if (fileTypeSet_.find(extension) == fileTypeSet_.end())
+                    {
+                        callback(app().getCustomErrorHandler()(k403Forbidden));
+                        return;
+                    }
+                }
+            }
+
             if (location.filters_.empty())
             {
                 sendStaticFileResponse(filePath,
@@ -170,20 +195,46 @@ void StaticFileRouter::route(
             return;
         }
     }
-    auto pos = lPath.rfind('.');
-    if (pos != std::string::npos)
+
+    std::string directoryPath =
+        HttpAppFrameworkImpl::instance().getDocumentRoot() + path;
+    struct stat fileStat;
+    if (stat(directoryPath.c_str(), &fileStat) == 0)
     {
-        std::string filetype = lPath.substr(pos + 1);
-        if (fileTypeSet_.find(filetype) != fileTypeSet_.end())
+        if (S_ISDIR(fileStat.st_mode))
         {
-            // LOG_INFO << "file query!" << path;
-            std::string filePath =
-                HttpAppFrameworkImpl::instance().getDocumentRoot() + path;
-            sendStaticFileResponse(filePath, req, callback, "");
-            return;
+            // Check if path is eligible for an implicit index.html
+            if (implicitPageEnable_)
+            {
+                std::string filePath = directoryPath + "/" + implicitPage_;
+                sendStaticFileResponse(filePath, req, callback, "");
+                return;
+            }
+            else
+            {
+                callback(app().getCustomErrorHandler()(k403Forbidden));
+                return;
+            }
+        }
+        else
+        {
+            // This is a normal page
+            auto pos = path.rfind('.');
+            if (pos == std::string::npos)
+            {
+                callback(app().getCustomErrorHandler()(k403Forbidden));
+                return;
+            }
+            std::string filetype = lPath.substr(pos + 1);
+            if (fileTypeSet_.find(filetype) != fileTypeSet_.end())
+            {
+                // LOG_INFO << "file query!" << path;
+                std::string filePath = directoryPath;
+                sendStaticFileResponse(filePath, req, callback, "");
+                return;
+            }
         }
     }
-
     callback(HttpResponse::newNotFoundResponse());
 }
 
@@ -210,6 +261,11 @@ void StaticFileRouter::sendStaticFileResponse(
     {
         if (cachedResp)
         {
+            if (req->method() != Get)
+            {
+                callback(app().getCustomErrorHandler()(k405MethodNotAllowed));
+                return;
+            }
             if (static_cast<HttpResponseImpl *>(cachedResp.get())
                     ->getHeaderBy("last-modified") ==
                 req->getHeaderBy("if-modified-since"))
@@ -217,6 +273,7 @@ void StaticFileRouter::sendStaticFileResponse(
                 std::shared_ptr<HttpResponseImpl> resp =
                     std::make_shared<HttpResponseImpl>();
                 resp->setStatusCode(k304NotModified);
+                resp->setContentTypeCode(CT_NONE);
                 HttpAppFrameworkImpl::instance().callCallback(req,
                                                               resp,
                                                               callback);
@@ -232,6 +289,12 @@ void StaticFileRouter::sendStaticFileResponse(
             {
                 fileExists = true;
                 LOG_TRACE << "last modify time:" << fileStat.st_mtime;
+                if (req->method() != Get)
+                {
+                    callback(
+                        app().getCustomErrorHandler()(k405MethodNotAllowed));
+                    return;
+                }
                 struct tm tm1;
 #ifdef _WIN32
                 gmtime_s(&tm1, &fileStat.st_mtime);
@@ -252,6 +315,7 @@ void StaticFileRouter::sendStaticFileResponse(
                     std::shared_ptr<HttpResponseImpl> resp =
                         std::make_shared<HttpResponseImpl>();
                     resp->setStatusCode(k304NotModified);
+                    resp->setContentTypeCode(CT_NONE);
                     HttpAppFrameworkImpl::instance().callCallback(req,
                                                                   resp,
                                                                   callback);
@@ -267,6 +331,11 @@ void StaticFileRouter::sendStaticFileResponse(
     }
     if (cachedResp)
     {
+        if (req->method() != Get)
+        {
+            callback(app().getCustomErrorHandler()(k405MethodNotAllowed));
+            return;
+        }
         LOG_TRACE << "Using file cache";
         HttpAppFrameworkImpl::instance().callCallback(req,
                                                       cachedResp,
@@ -283,6 +352,13 @@ void StaticFileRouter::sendStaticFileResponse(
             return;
         }
     }
+
+    if (req->method() != Get)
+    {
+        callback(app().getCustomErrorHandler()(k405MethodNotAllowed));
+        return;
+    }
+
     HttpResponsePtr resp;
     auto &acceptEncoding = req->getHeaderBy("accept-encoding");
 

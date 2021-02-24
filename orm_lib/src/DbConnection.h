@@ -1,7 +1,7 @@
 /**
  *
- *  DbConnection.h
- *  An Tao
+ *  @file DbConnection.h
+ *  @author An Tao
  *
  *  Copyright 2018, An Tao.  All rights reserved.
  *  https://github.com/an-tao/drogon
@@ -40,6 +40,7 @@ enum class ConnectStatus
 {
     None = 0,
     Connecting,
+    SettingCharacterSet,
     Ok,
     Bad
 };
@@ -55,7 +56,7 @@ struct SqlCmd
     ExceptPtrCallback exceptionCallback_;
     std::string preparingStatement_;
 #if LIBPQ_SUPPORTS_BATCH_MODE
-    bool isChanging_;
+    bool isChanging_{false};
 #endif
     SqlCmd(string_view &&sql,
            const size_t paraNum,
@@ -133,6 +134,9 @@ class DbConnection : public trantor::NonCopyable
     DbConnectionCallback okCallback_{[](const DbConnectionPtr &) {}};
     std::function<void(const std::exception_ptr &)> exceptionCallback_;
     bool isWorking_{false};
+
+    static std::map<std::string, std::string> parseConnString(
+        const std::string &);
 };
 
 }  // namespace orm
